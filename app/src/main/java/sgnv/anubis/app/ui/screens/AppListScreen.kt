@@ -1,5 +1,6 @@
 package sgnv.anubis.app.ui.screens
 
+import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import androidx.compose.foundation.Image
@@ -16,6 +17,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -24,10 +26,12 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Tab
 import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
@@ -49,6 +53,10 @@ private val grayscaleFilter = ColorFilter.colorMatrix(ColorMatrix().apply { setT
 @Composable
 fun AppListScreen(viewModel: MainViewModel, modifier: Modifier = Modifier) {
     val allApps by viewModel.installedApps.collectAsState()
+    val context = LocalContext.current
+    val prefs = remember { context.getSharedPreferences("settings", Context.MODE_PRIVATE) }
+    var showAutoWarning by remember { mutableStateOf(false) }
+    var pendingFirstAdd by remember { mutableStateOf<String?>(null) }
 
     var selectedTab by rememberSaveable { mutableIntStateOf(0) }
 
@@ -80,7 +88,13 @@ fun AppListScreen(viewModel: MainViewModel, modifier: Modifier = Modifier) {
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             Button(
-                onClick = { viewModel.autoSelectRestricted() },
+                onClick = {
+                    if (prefs.getBoolean("seen_auto_warning", false)) {
+                        viewModel.autoSelectRestricted()
+                    } else {
+                        showAutoWarning = true
+                    }
+                },
                 modifier = Modifier.weight(1f)
             ) {
                 Text("Авто-выбор")
@@ -128,11 +142,67 @@ fun AppListScreen(viewModel: MainViewModel, modifier: Modifier = Modifier) {
                 AppRow(
                     app = app,
                     isKnownRestricted = DefaultRestrictedApps.isKnownRestricted(app.packageName),
-                    onCycleGroup = { viewModel.cycleAppGroup(app.packageName) }
+                    onCycleGroup = {
+                        if (app.group == null && !prefs.getBoolean("seen_first_add_warning", false)) {
+                            pendingFirstAdd = app.packageName
+                        } else {
+                            viewModel.cycleAppGroup(app.packageName)
+                        }
+                    }
                 )
             }
             item { Spacer(Modifier.height(8.dp)) }
         }
+    }
+
+    pendingFirstAdd?.let { pkg ->
+        AlertDialog(
+            onDismissRequest = { pendingFirstAdd = null },
+            title = { Text("Добавить в группу?") },
+            text = {
+                Text(
+                    "Приложение будет заморожено — после этого его ярлык исчезнет с рабочего стола. " +
+                    "Восстановить можно в любой момент через долгое нажатие на Главной → «Разморозить» → «Убрать из группы». " +
+                    "Для массовой отмены — раздел «Восстановление» в настройках."
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    prefs.edit().putBoolean("seen_first_add_warning", true).apply()
+                    viewModel.cycleAppGroup(pkg)
+                    pendingFirstAdd = null
+                }) { Text("Добавить") }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingFirstAdd = null }) { Text("Отмена") }
+            }
+        )
+    }
+
+    if (showAutoWarning) {
+        AlertDialog(
+            onDismissRequest = { showAutoWarning = false },
+            title = { Text("Перед заморозкой") },
+            text = {
+                Text(
+                    "Anubis заморозит известные российские приложения через системный pm disable. " +
+                    "Большинство лаунчеров уберут их иконки с рабочего стола — это не удаление, " +
+                    "приложения и данные сохранятся. Но после разморозки ярлыки не вернутся на прежние позиции — " +
+                    "придётся расставить руками.\n\n" +
+                    "Если что-то пойдёт не так — в настройках есть раздел «Восстановление» с массовой разморозкой."
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    prefs.edit().putBoolean("seen_auto_warning", true).apply()
+                    showAutoWarning = false
+                    viewModel.autoSelectRestricted()
+                }) { Text("Заморозить") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showAutoWarning = false }) { Text("Отмена") }
+            }
+        )
     }
 }
 
