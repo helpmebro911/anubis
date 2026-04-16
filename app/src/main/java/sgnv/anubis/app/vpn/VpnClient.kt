@@ -11,6 +11,7 @@ enum class VpnClientType(
     NEKO_BOX("NekoBox", "moe.nb4a"),
     EXCLAVE("Exclave", "com.github.dyhkwong.sagernet"),
     HUSI("husi", "fr.husi"),
+    INCY("Incy", "llc.itdev.incy"),
     HAPP("Play", "com.happproxy", brand = "Happ"),
     HAPP_GITHUB("Github", "su.happ.proxyutility", brand = "Happ"),
     V2RAY_TUN("v2rayTun", "com.v2raytun.android"),
@@ -130,6 +131,22 @@ object VpnClientControls {
             startCommand = arrayOf(
                 "am", "start",
                 "-n", "fr.husi/.QuickToggleShortcut"
+            ),
+        ),
+
+        // Incy: exported VpnIntentReceiver with separate CONNECT/DISCONNECT actions — ideal SEPARATE.
+        VpnClientType.INCY to VpnClientControl(
+            clientType = VpnClientType.INCY,
+            mode = VpnControlMode.SEPARATE,
+            startCommand = arrayOf(
+                "am", "broadcast",
+                "-a", "llc.itdev.incy.CONNECT",
+                "-n", "llc.itdev.incy/.receiver.VpnIntentReceiver"
+            ),
+            stopCommand = arrayOf(
+                "am", "broadcast",
+                "-a", "llc.itdev.incy.DISCONNECT",
+                "-n", "llc.itdev.incy/.receiver.VpnIntentReceiver"
             ),
         ),
 
