@@ -12,6 +12,8 @@ enum class VpnClientType(
     EXCLAVE("Exclave", "com.github.dyhkwong.sagernet"),
     HUSI("husi", "fr.husi"),
     INCY("Incy", "llc.itdev.incy"),
+    CLASH_META("Meta", "com.github.metacubex.clash.meta", brand = "Clash Meta"),
+    CLASH_META_ALPHA("Alpha", "com.github.metacubex.clash.alpha", brand = "Clash Meta"),
     HAPP("Play", "com.happproxy", brand = "Happ"),
     HAPP_GITHUB("Github", "su.happ.proxyutility", brand = "Happ"),
     V2RAY_TUN("v2rayTun", "com.v2raytun.android"),
@@ -147,6 +149,41 @@ object VpnClientControls {
                 "am", "broadcast",
                 "-a", "llc.itdev.incy.DISCONNECT",
                 "-n", "llc.itdev.incy/.receiver.VpnIntentReceiver"
+            ),
+        ),
+
+        // Clash Meta (Mihomo, Meta flavor): ExternalControlActivity honors START_CLASH /
+        // STOP_CLASH with no extras or auth. Action strings are hard-coded as
+        // "com.github.metacubex.clash.meta.action.*" regardless of flavor — only the
+        // applicationId differs between Meta and Alpha builds.
+        VpnClientType.CLASH_META to VpnClientControl(
+            clientType = VpnClientType.CLASH_META,
+            mode = VpnControlMode.SEPARATE,
+            startCommand = arrayOf(
+                "am", "start",
+                "-a", "com.github.metacubex.clash.meta.action.START_CLASH",
+                "-n", "com.github.metacubex.clash.meta/com.github.kr328.clash.ExternalControlActivity"
+            ),
+            stopCommand = arrayOf(
+                "am", "start",
+                "-a", "com.github.metacubex.clash.meta.action.STOP_CLASH",
+                "-n", "com.github.metacubex.clash.meta/com.github.kr328.clash.ExternalControlActivity"
+            ),
+        ),
+
+        // Clash Meta Alpha: applicationId = com.github.metacubex.clash.alpha, same actions.
+        VpnClientType.CLASH_META_ALPHA to VpnClientControl(
+            clientType = VpnClientType.CLASH_META_ALPHA,
+            mode = VpnControlMode.SEPARATE,
+            startCommand = arrayOf(
+                "am", "start",
+                "-a", "com.github.metacubex.clash.alpha.action.START_CLASH",
+                "-n", "com.github.metacubex.clash.alpha/com.github.kr328.clash.ExternalControlActivity"
+            ),
+            stopCommand = arrayOf(
+                "am", "start",
+                "-a", "com.github.metacubex.clash.alpha.action.STOP_CLASH",
+                "-n", "com.github.metacubex.clash.alpha/com.github.kr328.clash.ExternalControlActivity"
             ),
         ),
 
