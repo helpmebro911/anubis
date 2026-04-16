@@ -10,6 +10,7 @@ enum class VpnClientType(
     V2RAY_NG_FDROID("F-Droid", "com.v2ray.ang.fdroid", brand = "v2rayNG"),
     NEKO_BOX("NekoBox", "moe.nb4a"),
     EXCLAVE("Exclave", "com.github.dyhkwong.sagernet"),
+    HUSI("husi", "fr.husi"),
     HAPP("Play", "com.happproxy", brand = "Happ"),
     HAPP_GITHUB("Github", "su.happ.proxyutility", brand = "Happ"),
     V2RAY_TUN("v2rayTun", "com.v2raytun.android"),
@@ -118,6 +119,17 @@ object VpnClientControls {
             startCommand = arrayOf(
                 "am", "start",
                 "-n", "com.github.dyhkwong.sagernet/io.nekohasekai.sagernet.QuickToggleShortcut"
+            ),
+        ),
+
+        // husi (SagerNet fork): same pattern as Exclave, but Java package matches applicationId
+        // (fr.husi), so the component uses the relative form.
+        VpnClientType.HUSI to VpnClientControl(
+            clientType = VpnClientType.HUSI,
+            mode = VpnControlMode.TOGGLE,
+            startCommand = arrayOf(
+                "am", "start",
+                "-n", "fr.husi/.QuickToggleShortcut"
             ),
         ),
 
