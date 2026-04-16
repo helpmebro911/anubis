@@ -9,6 +9,7 @@ enum class VpnClientType(
     V2RAY_NG("Play", "com.v2ray.ang", brand = "v2rayNG"),
     V2RAY_NG_FDROID("F-Droid", "com.v2ray.ang.fdroid", brand = "v2rayNG"),
     NEKO_BOX("NekoBox", "moe.nb4a"),
+    EXCLAVE("Exclave", "com.github.dyhkwong.sagernet"),
     HAPP("Play", "com.happproxy", brand = "Happ"),
     HAPP_GITHUB("Github", "su.happ.proxyutility", brand = "Happ"),
     V2RAY_TUN("v2rayTun", "com.v2raytun.android"),
@@ -108,6 +109,18 @@ object VpnClientControls {
                 "-n", "moe.nb4a/io.nekohasekai.sagernet.ui.QuickDisableShortcut"
             ),
         ),
+
+        // Exclave (SagerNet fork): kept only QuickToggleShortcut, so it's TOGGLE, not SEPARATE.
+        // Stop goes via the orchestrator's dummy-VPN/force-stop fallback.
+        VpnClientType.EXCLAVE to VpnClientControl(
+            clientType = VpnClientType.EXCLAVE,
+            mode = VpnControlMode.TOGGLE,
+            startCommand = arrayOf(
+                "am", "start",
+                "-n", "com.github.dyhkwong.sagernet/io.nekohasekai.sagernet.QuickToggleShortcut"
+            ),
+        ),
+
 
         // Happ (Play): widget broadcast toggle (discovered via jadx analysis)
         VpnClientType.HAPP to VpnClientControl(
