@@ -20,6 +20,7 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.sync.withPermit
 import sgnv.anubis.app.AnubisApp
 import sgnv.anubis.app.R
@@ -152,21 +153,24 @@ class VpnMonitorService : Service() {
     }
 
     private suspend fun applyManagedStateForVpn(active: Boolean) {
-        if (active) {
-            freezeGroup(AppGroup.LOCAL)
-            // LOCAL_AUTO_UNFREEZE: freeze unconditionally when VPN comes up — that's the whole point of the group.
-            freezeGroup(AppGroup.LOCAL_AUTO_UNFREEZE)
-            // Mirror manual orchestration when VPN is toggled outside Anubis.
-            if (AppSettings.shouldUnfreezeManagedAppsOnVpnToggle(applicationContext)) {
-                unfreezeGroup(AppGroup.VPN_ONLY)
-            }
-        } else {
-            freezeGroup(AppGroup.VPN_ONLY)
-            // LOCAL_AUTO_UNFREEZE: unfreeze unconditionally when VPN goes down — that's the whole point of the group.
-            unfreezeGroup(AppGroup.LOCAL_AUTO_UNFREEZE)
-            // Mirror manual orchestration when VPN is toggled outside Anubis.
-            if (AppSettings.shouldUnfreezeManagedAppsOnVpnToggle(applicationContext)) {
-                unfreezeGroup(AppGroup.LOCAL)
+        val mutex = (applicationContext as AnubisApp).groupOpMutex
+        mutex.withLock {
+            if (active) {
+                freezeGroup(AppGroup.LOCAL)
+                // LOCAL_AUTO_UNFREEZE: freeze unconditionally when VPN comes up — that's the whole point of the group.
+                freezeGroup(AppGroup.LOCAL_AUTO_UNFREEZE)
+                // Mirror manual orchestration when VPN is toggled outside Anubis.
+                if (AppSettings.shouldUnfreezeManagedAppsOnVpnToggle(applicationContext)) {
+                    unfreezeGroup(AppGroup.VPN_ONLY)
+                }
+            } else {
+                freezeGroup(AppGroup.VPN_ONLY)
+                // LOCAL_AUTO_UNFREEZE: unfreeze unconditionally when VPN goes down — that's the whole point of the group.
+                unfreezeGroup(AppGroup.LOCAL_AUTO_UNFREEZE)
+                // Mirror manual orchestration when VPN is toggled outside Anubis.
+                if (AppSettings.shouldUnfreezeManagedAppsOnVpnToggle(applicationContext)) {
+                    unfreezeGroup(AppGroup.LOCAL)
+                }
             }
         }
     }

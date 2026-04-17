@@ -3,6 +3,7 @@ package sgnv.anubis.app
 import android.app.Application
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import kotlinx.coroutines.sync.Mutex
 import sgnv.anubis.app.data.db.AppDatabase
 import sgnv.anubis.app.shizuku.ShizukuManager
 
@@ -11,6 +12,15 @@ class AnubisApp : Application() {
     val database: AppDatabase by lazy { AppDatabase.getInstance(this) }
     lateinit var shizukuManager: ShizukuManager
         private set
+
+    /**
+     * App-wide mutex for mass freeze/unfreeze operations. Prevents duplicate work when
+     * Orchestrator (invoked by UI toggle) and VpnMonitorService (invoked by VPN network
+     * callback) try to freeze/unfreeze the same groups in parallel. The second path
+     * acquires the lock after the first completes, sees everything already in the
+     * target state, and returns without doing any work.
+     */
+    val groupOpMutex: Mutex = Mutex()
 
     override fun onCreate() {
         super.onCreate()

@@ -17,8 +17,10 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.sync.withPermit
 import java.util.concurrent.atomic.AtomicInteger
+import sgnv.anubis.app.AnubisApp
 
 /**
  * Core logic:
@@ -83,8 +85,11 @@ class StealthOrchestrator(
             return
         }
 
+        val mutex = (context.applicationContext as AnubisApp).groupOpMutex
         val benchStart = System.currentTimeMillis()
-        val frozen = freezeGroup(AppGroup.LOCAL) + freezeGroup(AppGroup.LOCAL_AUTO_UNFREEZE)
+        val frozen = mutex.withLock {
+            freezeGroup(AppGroup.LOCAL) + freezeGroup(AppGroup.LOCAL_AUTO_UNFREEZE)
+        }
         emitBenchmark(frozen = frozen, unfrozen = 0, startMs = benchStart)
 
         vpnClientManager.startVPN(client)
@@ -279,27 +284,30 @@ class StealthOrchestrator(
     }
 
     private suspend fun applyManagedStateForVpn(active: Boolean) {
+        val mutex = (context.applicationContext as AnubisApp).groupOpMutex
         val benchStart = System.currentTimeMillis()
         var frozen = 0
         var unfrozen = 0
-        if (active) {
-            frozen += freezeGroup(AppGroup.LOCAL)
-            // LOCAL_AUTO_UNFREEZE: freeze unconditionally when VPN comes up — that's the whole point of the group.
-            frozen += freezeGroup(AppGroup.LOCAL_AUTO_UNFREEZE)
-            // Optional issue #31 behavior: make VPN_ONLY apps usable immediately after VPN comes up.
-            if (shouldUnfreezeManagedAppsOnVpnToggle()) {
-                unfrozen += unfreezeGroup(AppGroup.VPN_ONLY)
+        mutex.withLock {
+            if (active) {
+                frozen += freezeGroup(AppGroup.LOCAL)
+                // LOCAL_AUTO_UNFREEZE: freeze unconditionally when VPN comes up — that's the whole point of the group.
+                frozen += freezeGroup(AppGroup.LOCAL_AUTO_UNFREEZE)
+                // Optional issue #31 behavior: make VPN_ONLY apps usable immediately after VPN comes up.
+                if (shouldUnfreezeManagedAppsOnVpnToggle()) {
+                    unfrozen += unfreezeGroup(AppGroup.VPN_ONLY)
+                }
+                _state.value = StealthState.ENABLED
+            } else {
+                frozen += freezeGroup(AppGroup.VPN_ONLY)
+                // LOCAL_AUTO_UNFREEZE: unfreeze unconditionally when VPN goes down — that's the whole point of the group.
+                unfrozen += unfreezeGroup(AppGroup.LOCAL_AUTO_UNFREEZE)
+                // Optional issue #31 behavior: restore LOCAL apps once VPN is fully down.
+                if (shouldUnfreezeManagedAppsOnVpnToggle()) {
+                    unfrozen += unfreezeGroup(AppGroup.LOCAL)
+                }
+                _state.value = StealthState.DISABLED
             }
-            _state.value = StealthState.ENABLED
-        } else {
-            frozen += freezeGroup(AppGroup.VPN_ONLY)
-            // LOCAL_AUTO_UNFREEZE: unfreeze unconditionally when VPN goes down — that's the whole point of the group.
-            unfrozen += unfreezeGroup(AppGroup.LOCAL_AUTO_UNFREEZE)
-            // Optional issue #31 behavior: restore LOCAL apps once VPN is fully down.
-            if (shouldUnfreezeManagedAppsOnVpnToggle()) {
-                unfrozen += unfreezeGroup(AppGroup.LOCAL)
-            }
-            _state.value = StealthState.DISABLED
         }
         emitBenchmark(frozen = frozen, unfrozen = unfrozen, startMs = benchStart)
         bumpVersion()
