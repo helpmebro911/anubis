@@ -62,6 +62,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _installedApps = MutableStateFlow<List<InstalledAppInfo>>(emptyList())
     val installedApps: StateFlow<List<InstalledAppInfo>> = _installedApps
 
+    private val _installedAppsRefreshing = MutableStateFlow(false)
+    val installedAppsRefreshing: StateFlow<Boolean> = _installedAppsRefreshing
+
     // Home screen groups
     private val _localApps = MutableStateFlow<List<ManagedApp>>(emptyList())
     val localApps: StateFlow<List<ManagedApp>> = _localApps
@@ -352,8 +355,20 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun loadInstalledApps() {
-        viewModelScope.launch {
+        viewModelScope.launch { refreshInstalledAppsSync() }
+    }
+
+    /**
+     * Suspend version for pull-to-refresh: caller awaits completion, then dismisses the spinner.
+     * Don't rely on installedAppsRefreshing to flip — StateFlow conflates fast true→false and
+     * the UI never observes the peak.
+     */
+    suspend fun refreshInstalledAppsSync() {
+        _installedAppsRefreshing.value = true
+        try {
             _installedApps.value = repository.getInstalledApps()
+        } finally {
+            _installedAppsRefreshing.value = false
         }
     }
 

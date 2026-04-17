@@ -7,6 +7,7 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -29,6 +30,7 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -38,6 +40,8 @@ import androidx.compose.material3.Tab
 import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.pulltorefresh.PullToRefreshContainer
+import androidx.compose.material3.pulltorefresh.rememberPullToRefreshState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -51,6 +55,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.ColorMatrix
 import androidx.compose.ui.graphics.asImageBitmap
@@ -72,6 +77,7 @@ private enum class SortBy(val label: String) {
     PACKAGE("По package")
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AppListScreen(viewModel: MainViewModel, modifier: Modifier = Modifier) {
     val allApps by viewModel.installedApps.collectAsState()
@@ -150,11 +156,23 @@ fun AppListScreen(viewModel: MainViewModel, modifier: Modifier = Modifier) {
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically
             ) {
+                OutlinedButton(
+                    onClick = {
+                        if (prefs.getBoolean("seen_auto_warning", false)) {
+                            viewModel.autoSelectRestricted()
+                        } else {
+                            showAutoWarning = true
+                        }
+                    },
+                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                ) {
+                    Text("Авто-выбор", style = MaterialTheme.typography.labelMedium)
+                }
                 Text(
                     "Без VPN: $noVpnCount | Увед.: $autoUnfreezeCount | Только VPN: $vpnOnlyCount | С VPN: $launchCount",
-                    style = MaterialTheme.typography.bodySmall,
+                    style = MaterialTheme.typography.labelSmall,
                     fontWeight = FontWeight.Medium,
-                    modifier = Modifier.weight(1f)
+                    modifier = Modifier.weight(1f).padding(start = 8.dp)
                 )
                 IconButton(onClick = { searchActive = true }) {
                     Icon(Icons.Default.Search, contentDescription = "Поиск")
@@ -184,40 +202,31 @@ fun AppListScreen(viewModel: MainViewModel, modifier: Modifier = Modifier) {
 
         Spacer(Modifier.height(8.dp))
 
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            Button(
-                onClick = {
-                    if (prefs.getBoolean("seen_auto_warning", false)) {
-                        viewModel.autoSelectRestricted()
-                    } else {
-                        showAutoWarning = true
-                    }
-                },
-                modifier = Modifier.weight(1f)
-            ) {
-                Text("Авто-выбор")
-            }
-            OutlinedButton(
-                onClick = { viewModel.loadInstalledApps() },
-            ) {
-                Text("Обновить")
-            }
-        }
-
-        Spacer(Modifier.height(8.dp))
-
         // Legend
-        Row(
+        Column(
             modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceEvenly
+            verticalArrangement = Arrangement.spacedBy(4.dp)
         ) {
-            GroupBadge("Без VPN", MaterialTheme.colorScheme.error)
-            GroupBadge("Увед.", MaterialTheme.colorScheme.secondary)
-            GroupBadge("Только VPN", MaterialTheme.colorScheme.tertiary)
-            GroupBadge("С VPN", MaterialTheme.colorScheme.primary)
+            LegendRow(
+                color = MaterialTheme.colorScheme.error,
+                label = "Без VPN",
+                description = "При включении VPN — заморожено. Запуск только без VPN."
+            )
+            LegendRow(
+                color = MaterialTheme.colorScheme.secondary,
+                label = "Увед.",
+                description = "При VPN заморожено, без VPN — автоматически разморожено (для уведомлений)."
+            )
+            LegendRow(
+                color = MaterialTheme.colorScheme.tertiary,
+                label = "Только VPN",
+                description = "Без VPN заморожено. Запуск только через VPN."
+            )
+            LegendRow(
+                color = MaterialTheme.colorScheme.primary,
+                label = "С VPN",
+                description = "Не замораживается. При запуске автоматически включается VPN."
+            )
         }
 
         Spacer(Modifier.height(8.dp))
@@ -235,37 +244,62 @@ fun AppListScreen(viewModel: MainViewModel, modifier: Modifier = Modifier) {
             )
         }
 
-        LazyColumn(
-            modifier = Modifier.fillMaxSize(),
-            verticalArrangement = Arrangement.spacedBy(4.dp)
+        val pullState = rememberPullToRefreshState()
+
+        LaunchedEffect(pullState.isRefreshing) {
+            if (pullState.isRefreshing) {
+                viewModel.refreshInstalledAppsSync()
+                pullState.endRefresh()
+            }
+        }
+
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .nestedScroll(pullState.nestedScrollConnection)
         ) {
-            item { Spacer(Modifier.height(8.dp)) }
-            if (sortedList.isEmpty()) {
-                item {
-                    Text(
-                        if (normalizedQuery.isBlank()) "Список пуст." else "Ничего не найдено по запросу \"$normalizedQuery\".",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(vertical = 24.dp)
+            LazyColumn(
+                modifier = Modifier.fillMaxSize(),
+                verticalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                item { Spacer(Modifier.height(8.dp)) }
+                if (sortedList.isEmpty()) {
+                    item {
+                        Text(
+                            if (normalizedQuery.isBlank()) "Список пуст. Потяните вниз, чтобы обновить." else "Ничего не найдено по запросу \"$normalizedQuery\".",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 24.dp)
+                        )
+                    }
+                }
+                items(sortedList, key = { it.packageName }) { app ->
+                    AppRow(
+                        app = app,
+                        isKnownRestricted = DefaultRestrictedApps.isKnownRestricted(app.packageName),
+                        onCycleGroup = {
+                            if (app.group == null && !prefs.getBoolean("seen_first_add_warning", false)) {
+                                pendingFirstAdd = app.packageName
+                            } else {
+                                viewModel.cycleAppGroup(app.packageName)
+                            }
+                        }
                     )
                 }
+                item { Spacer(Modifier.height(8.dp)) }
             }
-            items(sortedList, key = { it.packageName }) { app ->
-                AppRow(
-                    app = app,
-                    isKnownRestricted = DefaultRestrictedApps.isKnownRestricted(app.packageName),
-                    onCycleGroup = {
-                        if (app.group == null && !prefs.getBoolean("seen_first_add_warning", false)) {
-                            pendingFirstAdd = app.packageName
-                        } else {
-                            viewModel.cycleAppGroup(app.packageName)
-                        }
-                    }
+
+            // Material3 1.2.x has a bug: PullToRefreshContainer stays visible at rest because
+            // translationY math doesn't fully hide it until 1.3.0. Hide it manually unless
+            // the user is actively pulling or we're refreshing.
+            if (pullState.isRefreshing || pullState.progress > 0f) {
+                PullToRefreshContainer(
+                    state = pullState,
+                    modifier = Modifier.align(Alignment.TopCenter)
                 )
             }
-            item { Spacer(Modifier.height(8.dp)) }
         }
     }
 
@@ -321,14 +355,30 @@ fun AppListScreen(viewModel: MainViewModel, modifier: Modifier = Modifier) {
 }
 
 @Composable
-private fun GroupBadge(label: String, color: androidx.compose.ui.graphics.Color) {
-    Row(verticalAlignment = Alignment.CenterVertically) {
+private fun LegendRow(
+    color: androidx.compose.ui.graphics.Color,
+    label: String,
+    description: String,
+) {
+    Row(verticalAlignment = Alignment.Top) {
         Card(
-            modifier = Modifier.size(12.dp),
+            modifier = Modifier.size(10.dp).padding(top = 4.dp),
             colors = CardDefaults.cardColors(containerColor = color)
         ) {}
-        Spacer(Modifier.width(4.dp))
-        Text(label, style = MaterialTheme.typography.labelSmall)
+        Spacer(Modifier.width(8.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                label,
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.Bold,
+                color = color
+            )
+            Text(
+                description,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
     }
 }
 
