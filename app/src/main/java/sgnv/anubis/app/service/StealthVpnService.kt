@@ -3,6 +3,8 @@ package sgnv.anubis.app.service
 import android.content.Context
 import android.content.Intent
 import android.net.VpnService
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
 
 /**
@@ -49,9 +51,32 @@ class StealthVpnService : VpnService() {
         stopSelf()
     }
 
+    override fun onDestroy() {
+        // Grace period: even after fd.close() the system may still briefly report our
+        // dummy VPN network as active in ConnectivityManager. Without this window,
+        // VpnMonitorService / orchestrator detection races us and sees our own dummy
+        // as "external VPN came up" → re-freezes groups we just unfroze.
+        Handler(Looper.getMainLooper()).postDelayed({
+            dummyVpnInFlight = false
+        }, DUMMY_GRACE_MS)
+        super.onDestroy()
+    }
+
     companion object {
         private const val TAG = "StealthVpnService"
         const val ACTION_DISCONNECT = "sgnv.anubis.app.FORCE_DISCONNECT_VPN"
+
+        /**
+         * True while our dummy VPN is being set up, is active, or has just been torn
+         * down and may still briefly appear in the system's network list. All VPN
+         * detection paths must ignore VPN transports while this flag is set, otherwise
+         * we'll treat our own force-disconnect VPN as an external VPN coming up.
+         */
+        @Volatile
+        var dummyVpnInFlight: Boolean = false
+            private set
+
+        private const val DUMMY_GRACE_MS = 1500L
 
         /**
          * Check if we have VPN consent.
@@ -64,6 +89,8 @@ class StealthVpnService : VpnService() {
          * Only works if we have VPN consent (prepareVpn returns null).
          */
         fun disconnect(context: Context) {
+            // Set synchronously BEFORE startService so no callback can fire before the flag is up.
+            dummyVpnInFlight = true
             val intent = Intent(context, StealthVpnService::class.java).apply {
                 action = ACTION_DISCONNECT
             }

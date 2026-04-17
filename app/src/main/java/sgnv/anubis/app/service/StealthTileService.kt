@@ -79,6 +79,9 @@ class StealthTileService : TileService() {
     }
 
     private fun isVpnActive(): Boolean {
+        // Ignore our own force-disconnect dummy VPN — otherwise the tile flips ON
+        // while we're trying to turn the stealth mode OFF.
+        if (StealthVpnService.dummyVpnInFlight) return false
         val cm = getSystemService(CONNECTIVITY_SERVICE) as ConnectivityManager
         return try {
             cm.allNetworks.any { network ->

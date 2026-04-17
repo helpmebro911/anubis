@@ -70,11 +70,15 @@ class VpnMonitorService : Service() {
 
         networkCallback = object : ConnectivityManager.NetworkCallback() {
             override fun onAvailable(network: Network) {
+                // Skip our own force-disconnect dummy VPN — treating it as "external VPN ON"
+                // would re-freeze groups that disable() just unfroze.
+                if (StealthVpnService.dummyVpnInFlight) return
                 // VPN turned ON — freeze LOCAL group
                 scope.launch { applyManagedStateForVpn(active = true) }
             }
 
             override fun onLost(network: Network) {
+                if (StealthVpnService.dummyVpnInFlight) return
                 // VPN turned OFF — freeze VPN_ONLY group
                 val stillActive = cm.allNetworks.any { n ->
                     cm.getNetworkCapabilities(n)

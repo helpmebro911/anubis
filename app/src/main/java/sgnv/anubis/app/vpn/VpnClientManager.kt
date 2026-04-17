@@ -132,11 +132,14 @@ class VpnClientManager(
 
         networkCallback = object : ConnectivityManager.NetworkCallback() {
             override fun onAvailable(network: Network) {
+                // Skip our own force-disconnect dummy VPN — it's not a real external VPN.
+                if (sgnv.anubis.app.service.StealthVpnService.dummyVpnInFlight) return
                 _vpnActive.value = true
                 CoroutineScope(Dispatchers.IO).launch { detectActiveVpnClient() }
             }
 
             override fun onLost(network: Network) {
+                if (sgnv.anubis.app.service.StealthVpnService.dummyVpnInFlight) return
                 val stillActive = isVpnCurrentlyActive(cm)
                 _vpnActive.value = stillActive
                 if (!stillActive) {
@@ -250,6 +253,10 @@ class VpnClientManager(
     }
 
     private fun isVpnCurrentlyActive(cm: ConnectivityManager): Boolean {
+        // While our own dummy VPN is active (force-disconnect flow), pretend no VPN
+        // is active. Otherwise orchestrator sees its own dummy as "VPN came up" and
+        // re-freezes groups that were just unfrozen by disable().
+        if (sgnv.anubis.app.service.StealthVpnService.dummyVpnInFlight) return false
         return try {
             cm.allNetworks.any { network ->
                 cm.getNetworkCapabilities(network)
