@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.List
+import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Icon
 import androidx.compose.material3.NavigationBar
@@ -28,6 +29,7 @@ import sgnv.anubis.app.ui.screens.AppListScreen
 import sgnv.anubis.app.ui.screens.HomeScreen
 import sgnv.anubis.app.ui.screens.RecoveryScreen
 import sgnv.anubis.app.ui.screens.SettingsScreen
+import sgnv.anubis.app.ui.screens.VpnClientScreen
 import sgnv.anubis.app.ui.theme.AnubisTheme
 import sgnv.anubis.app.update.UpdateDialog
 
@@ -74,6 +76,12 @@ class MainActivity : ComponentActivity() {
                             NavigationBarItem(
                                 selected = selectedTab == 2,
                                 onClick = { selectedTab = 2 },
+                                icon = { Icon(Icons.Default.Lock, contentDescription = null) },
+                                label = { Text("VPN") }
+                            )
+                            NavigationBarItem(
+                                selected = selectedTab == 3,
+                                onClick = { selectedTab = 3 },
                                 icon = { Icon(Icons.Default.Settings, contentDescription = null) },
                                 label = { Text("Настройки") }
                             )
@@ -96,7 +104,8 @@ class MainActivity : ComponentActivity() {
                             modifier = Modifier.padding(padding)
                         )
                         1 -> AppListScreen(viewModel, Modifier.padding(padding))
-                        2 -> SettingsScreen(
+                        2 -> VpnClientScreen(viewModel, Modifier.padding(padding))
+                        3 -> SettingsScreen(
                             viewModel = viewModel,
                             onOpenRecovery = { showRecovery = true },
                             modifier = Modifier.padding(padding)
