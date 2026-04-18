@@ -132,14 +132,14 @@ class VpnClientManager(
 
         networkCallback = object : ConnectivityManager.NetworkCallback() {
             override fun onAvailable(network: Network) {
-                // Skip our own force-disconnect dummy VPN — it's not a real external VPN.
-                if (sgnv.anubis.app.service.StealthVpnService.dummyVpnInFlight) return
+                // No dummy-gate here: orchestrator's stop sequence reads vpnActive to decide
+                // fallback steps. If we hide our dummy, waitForVpnOff exits early and
+                // launchLocal unfreezes with the external VPN still up (issue #63).
                 _vpnActive.value = true
                 CoroutineScope(Dispatchers.IO).launch { detectActiveVpnClient() }
             }
 
             override fun onLost(network: Network) {
-                if (sgnv.anubis.app.service.StealthVpnService.dummyVpnInFlight) return
                 val stillActive = isVpnCurrentlyActive(cm)
                 _vpnActive.value = stillActive
                 if (!stillActive) {
@@ -253,10 +253,12 @@ class VpnClientManager(
     }
 
     private fun isVpnCurrentlyActive(cm: ConnectivityManager): Boolean {
-        // While our own dummy VPN is active (force-disconnect flow), pretend no VPN
-        // is active. Otherwise orchestrator sees its own dummy as "VPN came up" and
-        // re-freezes groups that were just unfrozen by disable().
-        if (sgnv.anubis.app.service.StealthVpnService.dummyVpnInFlight) return false
+        // Don't gate on dummyVpnInFlight here: orchestrator.waitForVpnOff() relies on this
+        // to see the real picture. If we pretend no VPN is active while our dummy + the
+        // external VPN are both in the list, waitForVpnOff returns true instantly,
+        // Step 3 force-stop is skipped, and launchLocal proceeds with the external VPN
+        // still running (regression in v0.1.4, issue #63). The dummy-vs-external
+        // distinction is only needed in VpnMonitorService — see the guard there.
         return try {
             cm.allNetworks.any { network ->
                 cm.getNetworkCapabilities(network)
