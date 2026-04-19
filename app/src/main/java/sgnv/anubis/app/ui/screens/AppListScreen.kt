@@ -89,7 +89,7 @@ fun AppListScreen(viewModel: MainViewModel, modifier: Modifier = Modifier) {
     var selectedTab by rememberSaveable { mutableIntStateOf(0) }
     var searchActive by rememberSaveable { mutableStateOf(false) }
     var searchQuery by rememberSaveable { mutableStateOf("") }
-    var sortOrdinal by rememberSaveable { mutableIntStateOf(SortBy.GROUP.ordinal) }
+    var sortOrdinal by rememberSaveable { mutableIntStateOf(SortBy.PACKAGE.ordinal) }
     var sortMenuOpen by remember { mutableStateOf(false) }
     val sortBy = SortBy.entries[sortOrdinal]
 
