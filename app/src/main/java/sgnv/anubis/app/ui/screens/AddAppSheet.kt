@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -41,6 +42,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
+import sgnv.anubis.app.data.NeverRestrictApps
 import sgnv.anubis.app.data.model.AppGroup
 import sgnv.anubis.app.ui.MainViewModel
 
@@ -64,7 +66,22 @@ fun AddAppSheet(
     var query by rememberSaveable { mutableStateOf("") }
     var selectedPackages by rememberSaveable { mutableStateOf(setOf<String>()) }
     var isApplying by remember { mutableStateOf(false) }
+    var pendingNeverRestrict by remember { mutableStateOf<List<String>?>(null) }
     val normalizedQuery = query.trim()
+
+    val applySelection: () -> Unit = {
+        val packagesToAssign = selectedPackages.toList()
+        scope.launch {
+            isApplying = true
+            viewModel.setAppsGroup(packagesToAssign, targetGroup)
+            Toast.makeText(
+                context,
+                "Добавлено ${packagesToAssign.size} приложений",
+                Toast.LENGTH_SHORT
+            ).show()
+            onDismiss()
+        }
+    }
 
     val candidates = remember(allApps) {
         allApps.filter { !it.isSystem && !it.isDisabled }
@@ -211,13 +228,11 @@ fun AddAppSheet(
                 }
                 Button(
                     onClick = {
-                        val packagesToAssign = selectedPackages.toList()
-                        scope.launch {
-                            isApplying = true
-                            viewModel.setAppsGroup(packagesToAssign, targetGroup)
-                            val message = "Добавлено ${packagesToAssign.size} приложений"
-                            Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
-                            onDismiss()
+                        val risky = selectedPackages.filter { NeverRestrictApps.isNeverRestrict(it) }
+                        if (risky.isNotEmpty()) {
+                            pendingNeverRestrict = risky
+                        } else {
+                            applySelection()
                         }
                     },
                     enabled = selectedPackages.isNotEmpty() && !isApplying,
@@ -228,5 +243,36 @@ fun AddAppSheet(
             }
             Spacer(Modifier.height(16.dp))
         }
+    }
+
+    pendingNeverRestrict?.let { offenders ->
+        AlertDialog(
+            onDismissRequest = { pendingNeverRestrict = null },
+            title = { Text("Критичные приложения в выборе") },
+            text = {
+                Column {
+                    Text(
+                        "Эти приложения отвечают за ввод текста, звонки или 2FA. " +
+                            "Их заморозка может заблокировать устройство:",
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    offenders.forEach { pkg ->
+                        Text("• $pkg", style = MaterialTheme.typography.bodySmall)
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    pendingNeverRestrict = null
+                    applySelection()
+                }) { Text("Всё равно добавить") }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingNeverRestrict = null }) {
+                    Text("Отмена")
+                }
+            }
+        )
     }
 }
