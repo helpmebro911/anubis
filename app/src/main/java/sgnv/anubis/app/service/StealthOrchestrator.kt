@@ -334,8 +334,12 @@ class StealthOrchestrator(
 
     private companion object {
         // Cap on concurrent Shizuku IPC calls during group freeze/unfreeze.
-        // Higher values risk timing out on OEMs with stricter IPC backpressure (HyperOS cluster, #7).
-        const val FREEZE_CONCURRENCY = 4
+        // On Honor MagicOS parallel disable-user emits a flood of PACKAGE_REMOVED
+        // broadcasts that overwhelms the stock launcher's grid repaint — 4 was
+        // observed to ANR the launcher on 50+ apps (ealos fork, v0.1.4). The
+        // v0.1.5 binder path removes the shell-timeout class of failures but
+        // not the broadcast-storm class, so parallelism stays low.
+        const val FREEZE_CONCURRENCY = 2
     }
 }
 
