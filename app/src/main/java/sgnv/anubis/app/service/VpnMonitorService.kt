@@ -10,6 +10,7 @@ import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.NetworkRequest
 import android.os.IBinder
+import android.os.Process
 import androidx.core.app.NotificationCompat
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -73,17 +74,26 @@ class VpnMonitorService : Service() {
             override fun onAvailable(network: Network) {
                 // Skip our own force-disconnect dummy VPN — treating it as "external VPN ON"
                 // would re-freeze groups that disable() just unfroze.
+                //
+                // Primary check: ownerUid. Stable, survives the "long-idle phantom VPN
+                // entry" case where Android still lists our dummy well past its
+                // onDestroy grace window.
+                // Fallback check: the time-based dummyVpnInFlight flag, in case
+                // ownerUid reads -1 for reasons outside our understanding.
+                if (isOwnVpnNetwork(cm, network)) return
                 if (StealthVpnService.dummyVpnInFlight) return
                 // VPN turned ON — freeze LOCAL group
                 scope.launch { applyManagedStateForVpn(active = true) }
             }
 
             override fun onLost(network: Network) {
+                if (isOwnVpnNetwork(cm, network)) return
                 if (StealthVpnService.dummyVpnInFlight) return
                 // VPN turned OFF — freeze VPN_ONLY group
                 val stillActive = cm.allNetworks.any { n ->
-                    cm.getNetworkCapabilities(n)
-                        ?.hasTransport(NetworkCapabilities.TRANSPORT_VPN) == true
+                    val caps = cm.getNetworkCapabilities(n) ?: return@any false
+                    caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN) &&
+                        caps.ownerUid != Process.myUid()
                 }
                 if (!stillActive) {
                     scope.launch { applyManagedStateForVpn(active = false) }
@@ -94,6 +104,12 @@ class VpnMonitorService : Service() {
         try {
             cm.registerNetworkCallback(request, networkCallback!!)
         } catch (_: Exception) {}
+    }
+
+    private fun isOwnVpnNetwork(cm: ConnectivityManager, network: Network): Boolean = try {
+        cm.getNetworkCapabilities(network)?.ownerUid == Process.myUid()
+    } catch (_: Exception) {
+        false
     }
 
     private fun stopVpnMonitoring() {

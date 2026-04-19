@@ -208,12 +208,17 @@ class VpnClientManager(
     }
 
     private suspend fun getVpnOwnerByDumpsys(): String? {
+        // Exclude our own dummy VPN (StealthVpnService) from OwnerUid candidates —
+        // otherwise after disable() dumpsys can still list our dummy first and we'd
+        // report ourselves as the active external VPN client.
+        val myUid = android.os.Process.myUid()
+
         // Extract OwnerUid directly from the VPN network section.
         // On A11 the VPN entry has "type: VPN[" in its NetworkAgentInfo.
         // We grep for that (NOT "NOT_VPN"), then find OwnerUid nearby.
         val uidStr = shizukuManager.runCommandWithOutput(
             "sh", "-c",
-            "dumpsys connectivity 2>/dev/null | grep -A 30 'type: VPN\\[' | grep -oE 'OwnerUid: [0-9]+' | head -1 | grep -oE '[0-9]+'"
+            "dumpsys connectivity 2>/dev/null | grep -A 30 'type: VPN\\[' | grep -oE 'OwnerUid: [0-9]+' | grep -v 'OwnerUid: $myUid' | head -1 | grep -oE '[0-9]+'"
         )
 
         var uid = uidStr?.trim()?.toIntOrNull()
@@ -222,7 +227,7 @@ class VpnClientManager(
         if (uid == null || uid <= 0) {
             val uidStr2 = shizukuManager.runCommandWithOutput(
                 "sh", "-c",
-                "dumpsys connectivity 2>/dev/null | grep -A 10 'Transports: VPN' | grep -oE 'OwnerUid: [0-9]+' | head -1 | grep -oE '[0-9]+'"
+                "dumpsys connectivity 2>/dev/null | grep -A 10 'Transports: VPN' | grep -oE 'OwnerUid: [0-9]+' | grep -v 'OwnerUid: $myUid' | head -1 | grep -oE '[0-9]+'"
             )
             uid = uidStr2?.trim()?.toIntOrNull()
         }
@@ -233,7 +238,9 @@ class VpnClientManager(
                 "pm list packages --uid $uid 2>/dev/null | head -1"
             )?.trim()
             val pkg = pkgOutput?.removePrefix("package:")?.split("\\s+".toRegex())?.firstOrNull()?.trim()
-            if (!pkg.isNullOrBlank()) return pkg
+            // Second line of defense: if the resolved package is ours anyway
+            // (shared UID, unexpected dumpsys formatting), drop it.
+            if (!pkg.isNullOrBlank() && pkg != context.packageName) return pkg
         }
 
         return null
