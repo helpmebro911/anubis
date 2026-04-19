@@ -50,7 +50,6 @@ class ShortcutActivity : ComponentActivity() {
         val client = SelectedVpnClient.fromPackage(pkg)
 
         // Ensure UserService is bound (instant if already connected)
-        shizukuManager.bindUserService()
         vpnClientManager.startMonitoringVpn()
 
         CoroutineScope(Dispatchers.Main).launch {

@@ -44,7 +44,6 @@ class StealthTileService : TileService() {
             ?: VpnClientType.V2RAY_NG.packageName
         val client = SelectedVpnClient.fromPackage(pkg)
 
-        shizukuManager.bindUserService()
         vpnClientManager.startMonitoringVpn()
 
         scope.launch {

@@ -56,7 +56,6 @@ class StealthWidgetService : Service() {
             StealthWidgetProvider.COLOR_WORKING
         )
 
-        shizukuManager.bindUserService()
         vpnClientManager.startMonitoringVpn()
 
         scope.launch {

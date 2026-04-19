@@ -125,6 +125,7 @@ class ShizukuManager(private val packageManager: PackageManager) {
      */
     suspend fun awaitUserService(timeoutMs: Long = 500): Boolean {
         if (userService != null) return true
+        bindUserService()
         return withTimeoutOrNull(timeoutMs) {
             while (userService == null) delay(50)
             true
