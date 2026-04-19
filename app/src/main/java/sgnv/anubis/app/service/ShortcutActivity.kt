@@ -12,7 +12,6 @@ import sgnv.anubis.app.vpn.SelectedVpnClient
 import sgnv.anubis.app.vpn.VpnClientType
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 /**
@@ -55,8 +54,7 @@ class ShortcutActivity : ComponentActivity() {
         vpnClientManager.startMonitoringVpn()
 
         CoroutineScope(Dispatchers.Main).launch {
-            // Brief delay for UserService callback
-            delay(200)
+            shizukuManager.awaitUserService()
 
             // Resolve group. Repository is authoritative; extras are a legacy fallback
             // for pinned shortcuts created before this change. URL-launch never falls

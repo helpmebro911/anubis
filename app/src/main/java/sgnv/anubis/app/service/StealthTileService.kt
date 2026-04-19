@@ -14,8 +14,9 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
-import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 
 class StealthTileService : TileService() {
 
@@ -38,13 +39,11 @@ class StealthTileService : TileService() {
         val repo = AppRepository(app.database.managedAppDao(), this)
         val orchestrator = StealthOrchestrator(this, shizukuManager, vpnClientManager, repo)
 
-        // Tile uses the same selected client preference as the rest of the app.
         val prefs = AppSettings.prefs(this)
         val pkg = prefs.getString(AppSettings.KEY_VPN_CLIENT_PACKAGE, null)
             ?: VpnClientType.V2RAY_NG.packageName
         val client = SelectedVpnClient.fromPackage(pkg)
 
-        // Ensure UserService is bound (instant if Shizuku is ready)
         shizukuManager.bindUserService()
         vpnClientManager.startMonitoringVpn()
 
@@ -54,19 +53,24 @@ class StealthTileService : TileService() {
             if (willBeActive) {
                 orchestrator.enable(client)
                 VpnMonitorService.start(this@StealthTileService)
-                // Tile is already ON from the optimistic update; flip back only on failure.
-                if (orchestrator.lastError.value != null) updateTile(isActive = false)
+                if (orchestrator.lastError.value == null) {
+                    // startVPN() is fire-and-forget — wait for the real network callback.
+                    // Tile already shows ON from the optimistic update while we wait.
+                    withTimeoutOrNull(VPN_CONNECT_TIMEOUT_MS) {
+                        vpnClientManager.vpnActive.first { it }
+                    }
+                }
             } else {
                 vpnClientManager.refreshVpnState()
                 vpnClientManager.detectActiveVpnClient()
                 val detectedPkg = vpnClientManager.activeVpnPackage.value
                 orchestrator.disable(client, detectedPkg)
                 VpnMonitorService.stop(this@StealthTileService)
-                // stopVpn() already confirmed VPN is off — update immediately.
-                updateTile(isActive = false)
             }
 
             vpnClientManager.stopMonitoringVpn()
+            // Real state: VPN confirmed up (enable) or down (disable / timeout).
+            updateTile()
         }
     }
 
@@ -79,9 +83,6 @@ class StealthTileService : TileService() {
     }
 
     private fun isVpnActive(): Boolean {
-        // No dummy-gate: honest network-state read. The tile is UI-only; flashing briefly
-        // during our own force-disconnect flow is acceptable. The critical gate is in
-        // VpnMonitorService (which drives group freeze/unfreeze on transitions).
         val cm = getSystemService(CONNECTIVITY_SERVICE) as ConnectivityManager
         return try {
             cm.allNetworks.any { network ->
@@ -96,5 +97,9 @@ class StealthTileService : TileService() {
     override fun onDestroy() {
         scope.cancel()
         super.onDestroy()
+    }
+
+    companion object {
+        private const val VPN_CONNECT_TIMEOUT_MS = 15_000L
     }
 }

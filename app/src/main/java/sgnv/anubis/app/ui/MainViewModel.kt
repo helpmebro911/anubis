@@ -501,7 +501,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             // Shizuku is initialized in Application.onCreate — just bind UserService
             if (shizukuManager.status.value == ShizukuStatus.READY) {
                 shizukuManager.bindUserService()
-                delay(200)
+                shizukuManager.awaitUserService(500)
                 vpnClientManager.detectActiveVpnClient()
             } else {
                 // First launch or Shizuku not yet ready — brief wait
@@ -509,7 +509,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     delay(300)
                     if (shizukuManager.status.value == ShizukuStatus.READY) {
                         shizukuManager.bindUserService()
-                        delay(200)
+                        shizukuManager.awaitUserService(500)
                         vpnClientManager.detectActiveVpnClient()
                         return@repeat
                     }

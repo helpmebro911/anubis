@@ -14,9 +14,10 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.filterNotNull
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 
 /**
  * Short-lived service for home-screen widget toggle.
@@ -73,6 +74,16 @@ class StealthWidgetService : Service() {
             if (willBeActive) {
                 orchestrator.enable(client)
                 VpnMonitorService.start(this@StealthWidgetService)
+                if (orchestrator.lastError.value == null) {
+                    // startVPN() is fire-and-forget — wait for the network callback
+                    // to confirm VPN actually appeared before showing final state.
+                    StealthWidgetProvider.updateAllWidgets(
+                        this@StealthWidgetService, "Подключаю...", StealthWidgetProvider.COLOR_WORKING
+                    )
+                    withTimeoutOrNull(VPN_CONNECT_TIMEOUT_MS) {
+                        vpnClientManager.vpnActive.first { it }
+                    }
+                }
             } else {
                 vpnClientManager.refreshVpnState()
                 vpnClientManager.detectActiveVpnClient()
@@ -83,6 +94,8 @@ class StealthWidgetService : Service() {
 
             progressJob.cancel()
             vpnClientManager.stopMonitoringVpn()
+            // Real state from ConnectivityManager: VPN is either confirmed up (enable path)
+            // or confirmed down (disable path confirmed by stopVpn()).
             StealthWidgetProvider.updateAllWidgets(this@StealthWidgetService)
             stopSelf()
         }
@@ -95,6 +108,7 @@ class StealthWidgetService : Service() {
 
     companion object {
         const val ACTION_TOGGLE = "sgnv.anubis.app.WIDGET_DO_TOGGLE"
+        private const val VPN_CONNECT_TIMEOUT_MS = 15_000L
 
         fun toggle(context: Context) {
             context.startService(

@@ -127,7 +127,6 @@ class VpnMonitorService : Service() {
         val shizukuManager = app.shizukuManager
         if (!shizukuManager.isAvailable() || !shizukuManager.hasPermission()) return
         shizukuManager.bindUserService()
-        kotlinx.coroutines.delay(200)
 
         val repo = AppRepository(app.database.managedAppDao(), applicationContext)
         val packages = repo.getPackagesByGroup(group)
@@ -150,7 +149,6 @@ class VpnMonitorService : Service() {
         val shizukuManager = app.shizukuManager
         if (!shizukuManager.isAvailable() || !shizukuManager.hasPermission()) return
         shizukuManager.bindUserService()
-        kotlinx.coroutines.delay(200)
 
         val repo = AppRepository(app.database.managedAppDao(), applicationContext)
         val packages = repo.getPackagesByGroup(group)
