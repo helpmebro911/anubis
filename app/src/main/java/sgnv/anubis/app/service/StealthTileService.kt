@@ -49,24 +49,24 @@ class StealthTileService : TileService() {
         vpnClientManager.startMonitoringVpn()
 
         scope.launch {
-            // Small delay for UserService connection callback
-            delay(200)
+            shizukuManager.awaitUserService()
 
             if (willBeActive) {
                 orchestrator.enable(client)
                 VpnMonitorService.start(this@StealthTileService)
+                // Tile is already ON from the optimistic update; flip back only on failure.
+                if (orchestrator.lastError.value != null) updateTile(isActive = false)
             } else {
                 vpnClientManager.refreshVpnState()
                 vpnClientManager.detectActiveVpnClient()
                 val detectedPkg = vpnClientManager.activeVpnPackage.value
                 orchestrator.disable(client, detectedPkg)
                 VpnMonitorService.stop(this@StealthTileService)
+                // stopVpn() already confirmed VPN is off — update immediately.
+                updateTile(isActive = false)
             }
 
-            delay(2000)
-
             vpnClientManager.stopMonitoringVpn()
-            updateTile()
         }
     }
 

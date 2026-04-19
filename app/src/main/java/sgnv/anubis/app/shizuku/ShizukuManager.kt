@@ -8,9 +8,11 @@ import android.os.IBinder
 import android.os.Process
 import sgnv.anubis.app.IUserService
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import org.lsposed.hiddenapibypass.HiddenApiBypass
 import rikka.shizuku.Shizuku
 import rikka.shizuku.ShizukuBinderWrapper
@@ -114,6 +116,19 @@ class ShizukuManager(private val packageManager: PackageManager) {
             Shizuku.bindUserService(serviceArgs, serviceConnection)
         } catch (_: Exception) {
         }
+    }
+
+    /**
+     * Returns immediately if the UserService is already connected.
+     * Otherwise polls up to [timeoutMs] for onServiceConnected — useful in tile/widget
+     * onClick where a fixed delay(200) wastes time on the common warm path.
+     */
+    suspend fun awaitUserService(timeoutMs: Long = 500): Boolean {
+        if (userService != null) return true
+        return withTimeoutOrNull(timeoutMs) {
+            while (userService == null) delay(50)
+            true
+        } != null
     }
 
     fun unbindUserService() {
