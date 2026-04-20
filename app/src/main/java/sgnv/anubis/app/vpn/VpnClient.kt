@@ -313,12 +313,4 @@ object VpnClientControls {
     )
 
     fun getControl(type: VpnClientType): VpnClientControl = controls[type]!!
-
-    fun getControlForPackage(packageName: String): VpnClientControl {
-        val type = VpnClientType.fromPackageName(packageName)
-        return if (type != null) controls[type]!! else VpnClientControl(
-            clientType = VpnClientType.V2RAY_NG, // placeholder, unused for MANUAL
-            mode = VpnControlMode.MANUAL
-        )
-    }
 }
