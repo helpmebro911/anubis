@@ -15,30 +15,23 @@ import androidx.core.app.NotificationCompat
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.async
-import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.cancel
-import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
-import kotlinx.coroutines.sync.Semaphore
-import kotlinx.coroutines.sync.withLock
-import kotlinx.coroutines.sync.withPermit
 import sgnv.anubis.app.AnubisApp
 import sgnv.anubis.app.R
-import sgnv.anubis.app.data.model.AppGroup
-import sgnv.anubis.app.data.repository.AppRepository
-import sgnv.anubis.app.settings.AppSettings
-import sgnv.anubis.app.vpn.VpnClientControls
 import sgnv.anubis.app.ui.MainActivity
 
 /**
- * Foreground service that monitors VPN state changes and auto-freezes app groups.
+ * Foreground service that syncs stealth state with real VPN state while the UI is
+ * killed. Delegates all freeze/unfreeze and _state transitions to the shared
+ * StealthOrchestrator in AnubisApp — that way UI and service are backed by the
+ * same StateFlow and can't drift from each other.
  *
- * When VPN turns ON:  freezes LOCAL group
- * When VPN turns OFF: freezes VPN_ONLY group
+ * When VPN turns ON:  orchestrator.freezeOnly()  -> freezes LOCAL, sets ENABLED
+ * When VPN turns OFF: orchestrator.freezeVpnOnly() -> freezes VPN_ONLY, sets DISABLED
  *
- * This closes the gap where user toggles VPN outside of Anubis.
+ * This closes the gap where the user toggles VPN outside of Anubis.
  */
 class VpnMonitorService : Service() {
 
@@ -66,6 +59,7 @@ class VpnMonitorService : Service() {
         if (networkCallback != null) return
 
         val cm = getSystemService(CONNECTIVITY_SERVICE) as ConnectivityManager
+        val app = applicationContext as AnubisApp
 
         val request = NetworkRequest.Builder()
             .addTransportType(NetworkCapabilities.TRANSPORT_VPN)
@@ -76,29 +70,36 @@ class VpnMonitorService : Service() {
             override fun onAvailable(network: Network) {
                 // Skip our own force-disconnect dummy VPN — treating it as "external VPN ON"
                 // would re-freeze groups that disable() just unfroze.
-                //
-                // Primary check: ownerUid. Stable, survives the "long-idle phantom VPN
-                // entry" case where Android still lists our dummy well past its
-                // onDestroy grace window.
-                // Fallback check: the time-based dummyVpnInFlight flag, in case
-                // ownerUid reads -1 for reasons outside our understanding.
                 if (isOwnVpnNetwork(cm, network)) return
                 if (StealthVpnService.dummyVpnInFlight) return
-                // VPN turned ON — freeze LOCAL group
-                scope.launch { applyManagedStateForVpn(active = true) }
+                scope.launch {
+                    withTimeoutOrNull(APPLY_STATE_TIMEOUT_MS) {
+                        app.orchestrator.freezeOnly()
+                    }
+                    StealthWidgetProvider.updateAllWidgets(applicationContext)
+                }
             }
 
             override fun onLost(network: Network) {
                 if (isOwnVpnNetwork(cm, network)) return
                 if (StealthVpnService.dummyVpnInFlight) return
-                // VPN turned OFF — freeze VPN_ONLY group
+                // Exclude the just-lost network: at the moment onLost is dispatched,
+                // the system may not have removed it from allNetworks yet. Without
+                // this, stillActive sees the dying network and we skip freezeVpnOnly
+                // — state gets stuck at ENABLED after external VPN crashes.
                 val stillActive = cm.allNetworks.any { n ->
+                    if (n == network) return@any false
                     val caps = cm.getNetworkCapabilities(n) ?: return@any false
                     caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN) &&
                         caps.ownerUid != Process.myUid()
                 }
                 if (!stillActive) {
-                    scope.launch { applyManagedStateForVpn(active = false) }
+                    scope.launch {
+                        withTimeoutOrNull(APPLY_STATE_TIMEOUT_MS) {
+                            app.orchestrator.freezeVpnOnly()
+                        }
+                        StealthWidgetProvider.updateAllWidgets(applicationContext)
+                    }
                 }
             }
         }
@@ -122,90 +123,6 @@ class VpnMonitorService : Service() {
             } catch (_: Exception) {}
             networkCallback = null
         }
-    }
-
-    private suspend fun freezeGroup(group: AppGroup) {
-        val app = applicationContext as AnubisApp
-        val shizukuManager = app.shizukuManager
-        if (!shizukuManager.isAvailable() || !shizukuManager.hasPermission()) return
-        shizukuManager.bindUserService()
-
-        val repo = AppRepository(app.database.managedAppDao(), applicationContext)
-        val packages = repo.getPackagesByGroup(group)
-        val sem = Semaphore(FREEZE_CONCURRENCY)
-        coroutineScope {
-            packages.map { pkg ->
-                async {
-                    sem.withPermit {
-                        if (shizukuManager.isAppInstalled(pkg) && !shizukuManager.isAppFrozen(pkg)) {
-                            shizukuManager.freezeApp(pkg)
-                        }
-                    }
-                }
-            }.awaitAll()
-        }
-    }
-
-    private suspend fun unfreezeGroup(group: AppGroup) {
-        val app = applicationContext as AnubisApp
-        val shizukuManager = app.shizukuManager
-        if (!shizukuManager.isAvailable() || !shizukuManager.hasPermission()) return
-        shizukuManager.bindUserService()
-
-        val repo = AppRepository(app.database.managedAppDao(), applicationContext)
-        val packages = repo.getPackagesByGroup(group)
-        val sem = Semaphore(FREEZE_CONCURRENCY)
-        coroutineScope {
-            packages.map { pkg ->
-                async {
-                    sem.withPermit {
-                        if (shizukuManager.isAppInstalled(pkg) && shizukuManager.isAppFrozen(pkg)) {
-                            shizukuManager.unfreezeApp(pkg)
-                        }
-                    }
-                }
-            }.awaitAll()
-        }
-    }
-
-    private suspend fun applyManagedStateForVpn(active: Boolean) {
-        val mutex = (applicationContext as AnubisApp).groupOpMutex
-        try {
-            // Hard ceiling: if freeze/unfreeze hangs (e.g. binder IPC stuck),
-            // withTimeoutOrNull cancels the lock holder and releases the mutex
-            // via withLock's finally block — preventing permanent mutex starvation.
-            withTimeoutOrNull(APPLY_STATE_TIMEOUT_MS) {
-                mutex.withLock {
-                    if (active) {
-                        freezeGroup(AppGroup.LOCAL)
-                        freezeGroup(AppGroup.LOCAL_AUTO_UNFREEZE)
-                        if (AppSettings.shouldUnfreezeManagedAppsOnVpnToggle(applicationContext)) {
-                            unfreezeGroup(AppGroup.VPN_ONLY)
-                        }
-                    } else {
-                        freezeGroup(AppGroup.VPN_ONLY)
-                        unfreezeGroup(AppGroup.LOCAL_AUTO_UNFREEZE)
-                        if (AppSettings.shouldUnfreezeManagedAppsOnVpnToggle(applicationContext)) {
-                            unfreezeGroup(AppGroup.LOCAL)
-                        }
-                    }
-                }
-                freezeSelectedVpnClientIfNeeded()
-            }
-        } finally {
-            // Always update widget to real VPN state — even if freeze/unfreeze timed out.
-            StealthWidgetProvider.updateAllWidgets(applicationContext)
-        }
-    }
-
-    private suspend fun freezeSelectedVpnClientIfNeeded() {
-        val client = AppSettings.loadSelectedVpnClient(applicationContext)
-        val control = VpnClientControls.getControlForClient(client)
-        if (!control.freezeInIdle) return
-        val shizukuManager = (applicationContext as AnubisApp).shizukuManager
-        if (!shizukuManager.isAvailable() || !shizukuManager.hasPermission()) return
-        if (!shizukuManager.awaitUserService(500)) return
-        shizukuManager.freezeApp(client.packageName)
     }
 
     private fun buildNotification(): Notification {
@@ -234,8 +151,6 @@ class VpnMonitorService : Service() {
         const val ACTION_START = "sgnv.anubis.app.START_MONITOR"
         const val ACTION_STOP = "sgnv.anubis.app.STOP_MONITOR"
         const val NOTIFICATION_ID = 1
-
-        private const val FREEZE_CONCURRENCY = 2
 
         // Per-binder-op timeout is 5 s (ShizukuManager.BINDER_OP_TIMEOUT_MS).
         // With FREEZE_CONCURRENCY=2 and up to ~30 managed apps, worst case

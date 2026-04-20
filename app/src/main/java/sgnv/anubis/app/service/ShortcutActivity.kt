@@ -4,9 +4,7 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import sgnv.anubis.app.AnubisApp
 import sgnv.anubis.app.data.model.AppGroup
-import sgnv.anubis.app.data.repository.AppRepository
 import sgnv.anubis.app.settings.AppSettings
-import sgnv.anubis.app.vpn.VpnClientManager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -36,15 +34,12 @@ class ShortcutActivity : ComponentActivity() {
 
         val app = applicationContext as AnubisApp
         val shizukuManager = app.shizukuManager
-        val vpnClientManager = VpnClientManager(this, shizukuManager)
-        val repository = AppRepository(app.database.managedAppDao(), this)
-        val orchestrator = StealthOrchestrator(this, shizukuManager, vpnClientManager, repository)
+        val vpnClientManager = app.vpnClientManager
+        val repository = app.appRepository
+        val orchestrator = app.orchestrator
 
         // Shortcut launches must use the same selected VPN client as the main app UI.
         val client = AppSettings.loadSelectedVpnClient(this)
-
-        // Ensure UserService is bound (instant if already connected)
-        vpnClientManager.startMonitoringVpn()
 
         CoroutineScope(Dispatchers.Main).launch {
             shizukuManager.awaitUserService()
@@ -79,7 +74,6 @@ class ShortcutActivity : ComponentActivity() {
                 }
             }
 
-            vpnClientManager.stopMonitoringVpn()
             finish()
         }
     }

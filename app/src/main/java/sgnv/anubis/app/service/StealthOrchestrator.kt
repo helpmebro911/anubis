@@ -121,7 +121,14 @@ class StealthOrchestrator(
             _lastError.value = "Подключите VPN вручную в ${client.displayName}"
         }
 
-        _state.value = StealthState.ENABLED
+        // Compare-and-set guards the race where VpnMonitorService.onLost fires on a
+        // binder thread between waitForVpnOn succeeding and this line — it would
+        // set _state=DISABLED via applyManagedStateForVpn(false), and a plain
+        // assignment here would clobber that correct update back to ENABLED.
+        // If _state is no longer ENABLING, someone else already wrote a definitive
+        // value (ENABLED from applyManagedStateForVpn(true), DISABLED from onLost,
+        // or DISABLED from fail elsewhere) — don't overwrite.
+        _state.compareAndSet(StealthState.ENABLING, StealthState.ENABLED)
     }
 
     /**

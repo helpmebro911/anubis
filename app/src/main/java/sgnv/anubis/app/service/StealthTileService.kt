@@ -5,9 +5,7 @@ import android.net.NetworkCapabilities
 import android.service.quicksettings.Tile
 import android.service.quicksettings.TileService
 import sgnv.anubis.app.AnubisApp
-import sgnv.anubis.app.data.repository.AppRepository
 import sgnv.anubis.app.settings.AppSettings
-import sgnv.anubis.app.vpn.VpnClientManager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -33,14 +31,11 @@ class StealthTileService : TileService() {
 
         val app = application as AnubisApp
         val shizukuManager = app.shizukuManager
-        val vpnClientManager = VpnClientManager(this, shizukuManager)
-        val repo = AppRepository(app.database.managedAppDao(), this)
-        val orchestrator = StealthOrchestrator(this, shizukuManager, vpnClientManager, repo)
+        val vpnClientManager = app.vpnClientManager
+        val orchestrator = app.orchestrator
 
         // Tile uses the same selected client preference as the rest of the app.
         val client = AppSettings.loadSelectedVpnClient(this)
-
-        vpnClientManager.startMonitoringVpn()
 
         scope.launch {
             try {
@@ -63,8 +58,6 @@ class StealthTileService : TileService() {
                         VpnMonitorService.stop(this@StealthTileService)
                     }
                 }
-
-                vpnClientManager.stopMonitoringVpn()
             } finally {
                 updateTile()
             }

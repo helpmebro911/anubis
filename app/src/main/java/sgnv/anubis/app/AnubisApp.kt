@@ -7,13 +7,30 @@ import android.os.Build
 import kotlinx.coroutines.sync.Mutex
 import org.lsposed.hiddenapibypass.HiddenApiBypass
 import sgnv.anubis.app.data.db.AppDatabase
+import sgnv.anubis.app.data.repository.AppRepository
+import sgnv.anubis.app.service.StealthOrchestrator
 import sgnv.anubis.app.shizuku.ShizukuManager
+import sgnv.anubis.app.vpn.VpnClientManager
 
 class AnubisApp : Application() {
 
     val database: AppDatabase by lazy { AppDatabase.getInstance(this) }
     lateinit var shizukuManager: ShizukuManager
         private set
+
+    // Process-wide singletons so MainViewModel and VpnMonitorService share the same
+    // state (_vpnActive, StealthState). Previously each had its own VpnClientManager/
+    // orchestrator, so the service could freeze groups on VPN drop but couldn't sync
+    // the orchestrator's _state — UI stayed "защита активна" while VPN was actually down.
+    val vpnClientManager: VpnClientManager by lazy {
+        VpnClientManager(this, shizukuManager)
+    }
+    val appRepository: AppRepository by lazy {
+        AppRepository(database.managedAppDao(), this)
+    }
+    val orchestrator: StealthOrchestrator by lazy {
+        StealthOrchestrator(this, shizukuManager, vpnClientManager, appRepository)
+    }
 
     /**
      * App-wide mutex for mass freeze/unfreeze operations. Prevents duplicate work when
@@ -38,6 +55,10 @@ class AnubisApp : Application() {
         // Init Shizuku once — all components share this instance
         shizukuManager = ShizukuManager(packageManager)
         shizukuManager.startListening()
+
+        // Start VPN monitoring at process level — VpnClientManager's NetworkCallback
+        // and _vpnActive StateFlow are shared by UI and VpnMonitorService.
+        vpnClientManager.startMonitoringVpn()
     }
 
     override fun onTerminate() {

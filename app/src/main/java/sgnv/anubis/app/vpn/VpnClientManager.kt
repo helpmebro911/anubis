@@ -154,7 +154,10 @@ class VpnClientManager(
             }
 
             override fun onLost(network: Network) {
-                val stillActive = isVpnCurrentlyActive(cm)
+                // Exclude the just-lost network: at the moment onLost is dispatched,
+                // the system may not have removed it from allNetworks yet, so without
+                // this the check sees the dying network and _vpnActive stays true.
+                val stillActive = isVpnCurrentlyActive(cm, exclude = network)
                 _vpnActive.value = stillActive
                 if (!stillActive) {
                     _activeVpnClient.value = null
@@ -273,15 +276,17 @@ class VpnClientManager(
         return null
     }
 
-    private fun isVpnCurrentlyActive(cm: ConnectivityManager): Boolean {
+    private fun isVpnCurrentlyActive(cm: ConnectivityManager, exclude: Network? = null): Boolean {
         // Don't gate on dummyVpnInFlight here: orchestrator.waitForVpnOff() relies on this
         // to see the real picture. If we pretend no VPN is active while our dummy + the
         // external VPN are both in the list, waitForVpnOff returns true instantly,
         // Step 3 force-stop is skipped, and launchLocal proceeds with the external VPN
         // still running (regression in v0.1.4, issue #63). The dummy-vs-external
         // distinction is only needed in VpnMonitorService — see the guard there.
+        // `exclude` is used by onLost to skip the network being lost (see callsite).
         return try {
             cm.allNetworks.any { network ->
+                if (network == exclude) return@any false
                 cm.getNetworkCapabilities(network)
                     ?.hasTransport(NetworkCapabilities.TRANSPORT_VPN) == true
             }
