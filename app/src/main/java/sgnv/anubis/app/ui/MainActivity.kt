@@ -2,6 +2,7 @@ package sgnv.anubis.app.ui
 
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
@@ -57,6 +58,8 @@ class MainActivity : ComponentActivity() {
                 var selectedTab by rememberSaveable { mutableIntStateOf(0) }
                 var showRecovery by rememberSaveable { mutableStateOf(false) }
                 val dismissRecovery: () -> Unit = { showRecovery = false }
+
+                BackHandler(enabled = showRecovery, onBack = dismissRecovery)
 
                 Scaffold(
                     bottomBar = {
