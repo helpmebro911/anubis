@@ -13,3 +13,9 @@
 
 # Room TypeConverters
 -keep class sgnv.anubis.app.data.db.AppGroupConverter { *; }
+
+# Tink (pulled in by androidx.security:security-crypto for EncryptedSharedPreferences).
+# These annotation packages are compile-only — absent at runtime. R8 otherwise fails.
+-dontwarn com.google.errorprone.annotations.**
+-dontwarn javax.annotation.**
+-dontwarn javax.annotation.concurrent.**
