@@ -20,6 +20,8 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -67,7 +69,9 @@ fun VpnClientScreen(
 
     var searchActive by rememberSaveable { mutableStateOf(false) }
     var query by rememberSaveable { mutableStateOf("") }
+    var otherAppsExpanded by rememberSaveable { mutableStateOf(false) }
     val normalizedQuery = query.trim()
+    val showOtherApps = otherAppsExpanded || (searchActive && normalizedQuery.isNotBlank())
     val focusRequester = remember { FocusRequester() }
 
     val grouped = remember(normalizedQuery) {
@@ -200,17 +204,26 @@ fun VpnClientScreen(
                     } else {
                         val client = installedVariants.firstOrNull() ?: variants.first()
                         val isInstalled = installedClients.contains(client)
-                        VpnClientTile(
-                            client = client,
-                            label = client.fullDisplayName,
-                            isInstalled = isInstalled,
-                            isSelected = selectedClient.packageName == client.packageName,
-                            isFrozen = isInstalled && !viewModel.isVpnClientEnabled(client.packageName),
-                            onClick = {
-                                if (isInstalled) viewModel.selectVpnClient(SelectedVpnClient.fromKnown(client))
-                            },
-                            modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
-                        )
+                        val isThisSelected = selectedClient.packageName == client.packageName
+                        Column {
+                            VpnClientTile(
+                                client = client,
+                                label = client.fullDisplayName,
+                                isInstalled = isInstalled,
+                                isSelected = isThisSelected,
+                                isFrozen = isInstalled && !viewModel.isVpnClientEnabled(client.packageName),
+                                onClick = {
+                                    if (isInstalled) viewModel.selectVpnClient(SelectedVpnClient.fromKnown(client))
+                                },
+                                modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
+                            )
+                            if (isThisSelected && client == VpnClientType.TUNGUSKA) {
+                                TunguskaTokenPanel(
+                                    token = selectedClient.automationToken.orEmpty(),
+                                    onTokenChange = viewModel::updateSelectedVpnClientAutomationToken,
+                                )
+                            }
+                        }
                     }
                 }
             }
@@ -219,16 +232,29 @@ fun VpnClientScreen(
                 Spacer(Modifier.height(16.dp))
                 HorizontalDivider()
                 Spacer(Modifier.height(8.dp))
-                Text(
-                    "Другой клиент",
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Bold
-                )
-                Text(
-                    "Любое установленное приложение (ручной режим)",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
+                Row(
+                    modifier = Modifier.fillMaxWidth().clickable {
+                        otherAppsExpanded = !otherAppsExpanded
+                    },
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            "Другой клиент",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Text(
+                            "Любое установленное приложение (ручной режим)",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Icon(
+                        if (showOtherApps) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
+                        contentDescription = if (showOtherApps) "Свернуть" else "Развернуть",
+                    )
+                }
                 Spacer(Modifier.height(8.dp))
             }
 
@@ -263,28 +289,7 @@ fun VpnClientScreen(
                 }
             }
 
-            if (selectedClient.packageName == VpnClientType.TUNGUSKA.packageName) {
-                item(key = "tunguska_token") {
-                    Spacer(Modifier.height(12.dp))
-                    OutlinedTextField(
-                        value = selectedClient.automationToken.orEmpty(),
-                        onValueChange = viewModel::updateSelectedVpnClientAutomationToken,
-                        modifier = Modifier.fillMaxWidth(),
-                        singleLine = true,
-                        label = { Text("Automation token") },
-                        placeholder = { Text("Paste the Tunguska automation token") },
-                        visualTransformation = PasswordVisualTransformation(),
-                    )
-                    Spacer(Modifier.height(8.dp))
-                    Text(
-                        "Required for Tunguska start and stop commands.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-            }
-
-            items(otherApps, key = { "app_${it.packageName}" }) { app ->
+            if (showOtherApps) items(otherApps, key = { "app_${it.packageName}" }) { app ->
                 val iconBitmap = remember(app.packageName) {
                     try {
                         val drawable = pm.getApplicationIcon(app.packageName)
@@ -328,6 +333,63 @@ fun VpnClientScreen(
                         RadioButton(selected = true, onClick = null)
                     }
                 }
+            }
+        }
+    }
+}
+
+@Composable
+private fun TunguskaTokenPanel(
+    token: String,
+    onTokenChange: (String) -> Unit,
+) {
+    var expanded by rememberSaveable { mutableStateOf(token.isBlank()) }
+    Card(
+        modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant
+        ),
+    ) {
+        Column(Modifier.padding(16.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth().clickable { expanded = !expanded },
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        "Токен автоматизации",
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.Medium,
+                    )
+                    Text(
+                        if (token.isBlank()) "Не задан" else "Задан",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = if (token.isBlank()) MaterialTheme.colorScheme.error
+                        else MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Icon(
+                    if (expanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
+                    contentDescription = if (expanded) "Свернуть" else "Развернуть",
+                )
+            }
+            if (expanded) {
+                Spacer(Modifier.height(12.dp))
+                OutlinedTextField(
+                    value = token,
+                    onValueChange = onTokenChange,
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                    label = { Text("Токен") },
+                    placeholder = { Text("Вставьте токен автоматизации Tunguska") },
+                    visualTransformation = PasswordVisualTransformation(),
+                )
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    "Требуется для команд запуска и остановки Tunguska.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
         }
     }
