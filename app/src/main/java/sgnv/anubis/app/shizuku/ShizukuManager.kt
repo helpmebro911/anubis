@@ -23,8 +23,11 @@ class ShizukuManager(private val packageManager: PackageManager) {
     @Volatile
     private var userService: IUserService? = null
 
-    private val _status = MutableStateFlow(ShizukuStatus.UNAVAILABLE)
+    private val _status = MutableStateFlow(initialStatus())
     val status: StateFlow<ShizukuStatus> = _status
+
+    private fun initialStatus(): ShizukuStatus =
+        if (isInstalled()) ShizukuStatus.NOT_RUNNING else ShizukuStatus.NOT_INSTALLED
 
     private val serviceConnection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName?, binder: IBinder?) {
@@ -45,7 +48,8 @@ class ShizukuManager(private val packageManager: PackageManager) {
 
     private val binderDeadListener = Shizuku.OnBinderDeadListener {
         userService = null
-        _status.value = ShizukuStatus.UNAVAILABLE
+        // Binder gone but the package is still installed (otherwise we wouldn't be running here).
+        _status.value = ShizukuStatus.NOT_RUNNING
     }
 
     private val permissionResultListener =
@@ -72,10 +76,13 @@ class ShizukuManager(private val packageManager: PackageManager) {
     }
 
     fun refreshStatus() {
+        // Check binder first: Sui (root module) exposes the Shizuku binder without installing
+        // the moe.shizuku.privileged.api package, so "not installed" is only meaningful when
+        // the binder is also absent.
         _status.value = when {
-            !isAvailable() -> ShizukuStatus.UNAVAILABLE
-            !hasPermission() -> ShizukuStatus.NO_PERMISSION
-            else -> ShizukuStatus.READY
+            isAvailable() -> if (hasPermission()) ShizukuStatus.READY else ShizukuStatus.NO_PERMISSION
+            isInstalled() -> ShizukuStatus.NOT_RUNNING
+            else -> ShizukuStatus.NOT_INSTALLED
         }
     }
 
@@ -83,6 +90,15 @@ class ShizukuManager(private val packageManager: PackageManager) {
         return try {
             Shizuku.pingBinder()
         } catch (e: Exception) {
+            false
+        }
+    }
+
+    fun isInstalled(): Boolean {
+        return try {
+            packageManager.getPackageInfo(SHIZUKU_PACKAGE, 0)
+            true
+        } catch (e: PackageManager.NameNotFoundException) {
             false
         }
     }
@@ -297,7 +313,10 @@ class ShizukuManager(private val packageManager: PackageManager) {
 }
 
 enum class ShizukuStatus {
-    UNAVAILABLE,
+    NOT_INSTALLED,
+    NOT_RUNNING,
     NO_PERMISSION,
     READY
 }
+
+const val SHIZUKU_PACKAGE = "moe.shizuku.privileged.api"

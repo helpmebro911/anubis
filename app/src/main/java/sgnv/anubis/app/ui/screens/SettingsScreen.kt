@@ -1,5 +1,6 @@
 package sgnv.anubis.app.ui.screens
 
+import android.content.Intent
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -24,6 +25,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.core.net.toUri
+import sgnv.anubis.app.shizuku.SHIZUKU_PACKAGE
 import sgnv.anubis.app.shizuku.ShizukuStatus
 import sgnv.anubis.app.ui.MainViewModel
 
@@ -114,17 +116,45 @@ fun SettingsScreen(
 
         Spacer(Modifier.height(24.dp))
 
-        // Shizuku status
+        // Shizuku status — clickable when not ready: opens Shizuku activity, the download page,
+        // or requests permission depending on the state (issue #84).
         Text("Shizuku", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
         Spacer(Modifier.height(8.dp))
-        Card(modifier = Modifier.fillMaxWidth()) {
+        val shizukuContext = LocalContext.current
+        val shizukuCardModifier = when (shizukuStatus) {
+            ShizukuStatus.READY -> Modifier.fillMaxWidth()
+            ShizukuStatus.NO_PERMISSION -> Modifier.fillMaxWidth().clickable { viewModel.requestShizukuPermission() }
+            ShizukuStatus.NOT_RUNNING -> Modifier.fillMaxWidth().clickable {
+                val launch = shizukuContext.packageManager.getLaunchIntentForPackage(SHIZUKU_PACKAGE)
+                if (launch != null) shizukuContext.startActivity(launch)
+            }
+            ShizukuStatus.NOT_INSTALLED -> Modifier.fillMaxWidth().clickable {
+                shizukuContext.startActivity(Intent(Intent.ACTION_VIEW, "https://shizuku.rikka.app/download/".toUri()))
+            }
+        }
+        Card(modifier = shizukuCardModifier) {
             Row(Modifier.fillMaxWidth().padding(16.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                Text("Статус", style = MaterialTheme.typography.bodyMedium)
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("Статус", style = MaterialTheme.typography.bodyMedium)
+                    if (shizukuStatus != ShizukuStatus.READY) {
+                        Text(
+                            when (shizukuStatus) {
+                                ShizukuStatus.NOT_INSTALLED -> "Нажмите, чтобы скачать"
+                                ShizukuStatus.NOT_RUNNING -> "Нажмите, чтобы открыть Shizuku"
+                                ShizukuStatus.NO_PERMISSION -> "Нажмите, чтобы выдать разрешение"
+                                ShizukuStatus.READY -> ""
+                            },
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
                 Text(
                     when (shizukuStatus) {
                         ShizukuStatus.READY -> "Подключён"
                         ShizukuStatus.NO_PERMISSION -> "Нет разрешения"
-                        ShizukuStatus.UNAVAILABLE -> "Не доступен"
+                        ShizukuStatus.NOT_RUNNING -> "Не запущен"
+                        ShizukuStatus.NOT_INSTALLED -> "Не установлен"
                     },
                     style = MaterialTheme.typography.bodyMedium,
                     fontWeight = FontWeight.Medium,
@@ -222,11 +252,7 @@ fun SettingsScreen(
 
                 val context = LocalContext.current
                 TextButton(onClick = {
-                    val intent = android.content.Intent(
-                        android.content.Intent.ACTION_VIEW,
-                        "https://github.com/sogonov/anubis".toUri()
-                    )
-                    context.startActivity(intent)
+                    context.startActivity(Intent(Intent.ACTION_VIEW, "https://github.com/sogonov/anubis".toUri()))
                 }) {
                     Text("GitHub", style = MaterialTheme.typography.labelMedium)
                 }

@@ -61,6 +61,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import sgnv.anubis.app.data.model.ManagedApp
 import sgnv.anubis.app.service.StealthState
+import sgnv.anubis.app.shizuku.SHIZUKU_PACKAGE
 import sgnv.anubis.app.shizuku.ShizukuStatus
 import sgnv.anubis.app.ui.MainViewModel
 
@@ -93,6 +94,7 @@ fun HomeScreen(
     // Observing this triggers recomposition when any app is frozen/unfrozen
     val frozenVersion by viewModel.frozenVersion.collectAsState()
     val dangerousAppWarning by viewModel.dangerousAppWarning.collectAsState()
+    val manualUnfreezeWarning by viewModel.manualUnfreezeWarning.collectAsState()
 
     val isEnabled = stealthState == StealthState.ENABLED
     val isTransitioning = stealthState == StealthState.ENABLING || stealthState == StealthState.DISABLING
@@ -203,11 +205,15 @@ fun HomeScreen(
             }
         }
 
-        // Error / Shizuku warning
-        lastError?.let { error ->
-            Spacer(Modifier.height(8.dp))
-            Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer)) {
-                Text(error, Modifier.padding(12.dp), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onErrorContainer)
+        // Error card — only when Shizuku is READY. Otherwise the dedicated Shizuku card below
+        // already explains the situation, and showing both produces a confusing duplicate
+        // (issue #85).
+        if (shizukuStatus == ShizukuStatus.READY) {
+            lastError?.let { error ->
+                Spacer(Modifier.height(8.dp))
+                Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer)) {
+                    Text(error, Modifier.padding(12.dp), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onErrorContainer)
+                }
             }
         }
 
@@ -217,20 +223,25 @@ fun HomeScreen(
             Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.tertiaryContainer)) {
                 Column(Modifier.padding(12.dp)) {
                     Text(
-                        if (shizukuStatus == ShizukuStatus.UNAVAILABLE) "Shizuku не установлен или не запущен" else "Нет разрешения Shizuku",
+                        when (shizukuStatus) {
+                            ShizukuStatus.NOT_INSTALLED -> "Shizuku не установлен"
+                            ShizukuStatus.NOT_RUNNING -> "Shizuku не запущен"
+                            ShizukuStatus.NO_PERMISSION -> "Нет разрешения Shizuku"
+                            ShizukuStatus.READY -> "" // unreachable
+                        },
                         style = MaterialTheme.typography.bodySmall
                     )
                     Row(Modifier.padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        if (shizukuStatus == ShizukuStatus.UNAVAILABLE) {
-                            Button(onClick = {
-                                context.startActivity(Intent(
-                                    Intent.ACTION_VIEW,
-                                    "https://shizuku.rikka.app/download/".toUri()
-                                ))
+                        when (shizukuStatus) {
+                            ShizukuStatus.NOT_INSTALLED -> Button(onClick = {
+                                context.startActivity(Intent(Intent.ACTION_VIEW, "https://shizuku.rikka.app/download/".toUri()))
                             }) { Text("Скачать") }
-                        }
-                        if (shizukuStatus == ShizukuStatus.NO_PERMISSION) {
-                            Button(onClick = { viewModel.requestShizukuPermission() }) { Text("Разрешить") }
+                            ShizukuStatus.NOT_RUNNING -> Button(onClick = {
+                                val launch = context.packageManager.getLaunchIntentForPackage(SHIZUKU_PACKAGE)
+                                if (launch != null) context.startActivity(launch)
+                            }) { Text("Открыть Shizuku") }
+                            ShizukuStatus.NO_PERMISSION -> Button(onClick = { viewModel.requestShizukuPermission() }) { Text("Разрешить") }
+                            ShizukuStatus.READY -> Unit
                         }
                     }
                 }
@@ -401,6 +412,35 @@ fun HomeScreen(
         )
     }
 
+    // Manual unfreeze warning (issue #81): user is unfreezing a LOCAL app while VPN is on.
+    manualUnfreezeWarning?.let { pkg ->
+        val context = LocalContext.current
+        val pm = context.packageManager
+        val label = remember(pkg) {
+            try { pm.getApplicationInfo(pkg, 0).loadLabel(pm).toString() }
+            catch (e: Exception) { pkg }
+        }
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { viewModel.dismissManualUnfreezeWarning() },
+            title = { Text("Разморозить под VPN?") },
+            text = {
+                Text(
+                    "«$label» в группе «Без VPN». Если разморозить сейчас, " +
+                    "приложение запустится через активный VPN — это противоречит цели изоляции.\n\n" +
+                    "Лучше сначала выключить VPN, затем работать с приложением."
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = { viewModel.confirmManualUnfreeze() }) {
+                    Text("Всё равно разморозить", color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { viewModel.dismissManualUnfreezeWarning() }) { Text("Отмена") }
+            }
+        )
+    }
+
     // Inline add-to-group sheet (one per tap on the "+" in a group header)
     addingToGroup?.let { group ->
         AddAppSheet(
@@ -465,7 +505,7 @@ fun HomeScreen(
                 // Actions
                 BottomSheetAction(
                     text = if (isFrozen) "Разморозить" else "Заморозить",
-                    onClick = { viewModel.toggleAppFrozen(pkg); menuApp = null }
+                    onClick = { viewModel.requestToggleAppFrozen(pkg); menuApp = null }
                 )
 
                 BottomSheetAction(

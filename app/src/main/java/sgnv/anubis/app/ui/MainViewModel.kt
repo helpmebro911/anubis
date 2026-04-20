@@ -104,6 +104,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _dangerousAppWarning = MutableStateFlow<String?>(null)
     val dangerousAppWarning: StateFlow<String?> = _dangerousAppWarning
 
+    /** Package pending confirmation for manual unfreeze under active VPN (issue #81). */
+    private val _manualUnfreezeWarning = MutableStateFlow<String?>(null)
+    val manualUnfreezeWarning: StateFlow<String?> = _manualUnfreezeWarning
+
     private val _updateInfo = MutableStateFlow<UpdateInfo?>(null)
     val updateInfo: StateFlow<UpdateInfo?> = _updateInfo
 
@@ -210,6 +214,36 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             orchestrator.toggleAppFrozen(packageName)
             loadGroupedApps()
         }
+    }
+
+    /**
+     * Issue #81: ручная разморозка LOCAL-приложения при активном VPN — выстрел в ногу
+     * (приложение получит реальный сетевой адрес через VPN). Перехватываем такой случай
+     * подтверждающим диалогом; всё остальное (заморозка, или разморозка вне LOCAL/VPN OFF)
+     * проходит без вопросов.
+     */
+    fun requestToggleAppFrozen(packageName: String) {
+        if (!isAppFrozen(packageName) || !vpnActive.value) {
+            toggleAppFrozen(packageName)
+            return
+        }
+        val isLocalGroup = _localApps.value.any { it.packageName == packageName }
+            || _localAutoUnfreezeApps.value.any { it.packageName == packageName }
+        if (isLocalGroup) {
+            _manualUnfreezeWarning.value = packageName
+        } else {
+            toggleAppFrozen(packageName)
+        }
+    }
+
+    fun confirmManualUnfreeze() {
+        val pkg = _manualUnfreezeWarning.value ?: return
+        _manualUnfreezeWarning.value = null
+        toggleAppFrozen(pkg)
+    }
+
+    fun dismissManualUnfreezeWarning() {
+        _manualUnfreezeWarning.value = null
     }
 
     fun isAppFrozen(packageName: String): Boolean = shizukuManager.isAppFrozen(packageName)
