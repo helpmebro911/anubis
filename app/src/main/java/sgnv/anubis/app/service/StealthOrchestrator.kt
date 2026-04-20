@@ -6,8 +6,10 @@ import sgnv.anubis.app.data.repository.AppRepository
 import sgnv.anubis.app.settings.AppSettings
 import sgnv.anubis.app.shizuku.ShizukuManager
 import sgnv.anubis.app.vpn.SelectedVpnClient
+import sgnv.anubis.app.vpn.VpnClientControls
 import sgnv.anubis.app.vpn.VpnClientManager
 import sgnv.anubis.app.vpn.VpnControlMode
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
@@ -16,9 +18,12 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.sync.withPermit
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import java.util.concurrent.atomic.AtomicInteger
 import sgnv.anubis.app.AnubisApp
 
@@ -78,14 +83,47 @@ class StealthOrchestrator(
      * Enable stealth (VPN ON): freeze LOCAL apps, start VPN.
      * VPN_ONLY stays frozen — they are only unfrozen by explicit launch.
      */
-    suspend fun enable(client: SelectedVpnClient) {
+    suspend fun enable(client: SelectedVpnClient) = withContext(Dispatchers.Default) {
+        // Detached-job pattern: enableImpl runs in a process-wide scope, we wait via
+        // job.join() with a hard timeout. Why: the original `withTimeoutOrNull(120s) {
+        // enableImpl(...) }` couldn't fire because enableImpl's chain hits a
+        // `withContext(Dispatchers.IO) { sync_binder_call }` (Shizuku userService.execCommand
+        // for am broadcast / dumpsys), and Kotlin cancellation is cooperative — withContext
+        // can't return until the IO block completes. join() IS truly cancellable, so the
+        // user-facing state recovers at 120 s even if the binder is wedged. The orphan
+        // continues until the binder eventually returns; at most one orphan, and the
+        // groupOpMutex is released long before the hang point (after freezeGroup).
         _lastError.value = null
         _state.value = StealthState.ENABLING
+        val app = context.applicationContext as AnubisApp
+        val job = app.scope.launch { enableImpl(client) }
+        try {
+            val finished = withTimeoutOrNull(TOTAL_OP_TIMEOUT_MS) {
+                job.join(); true
+            } ?: false
+            if (!finished) {
+                job.cancel()  // best-effort; sync binder won't actually interrupt
+                _progressText.value = null
+                _lastError.value = "Операция превысила таймаут (${TOTAL_OP_TIMEOUT_MS / 1000} с). Попробуйте снова."
+                _state.value = StealthState.DISABLED
+            }
+        } finally {
+            // Safety: never leave _state stuck in a transitional value — align with
+            // actual VPN state so UI can't get stuck on the orange "ENABLING" banner
+            // regardless of cancellation, missed code path or unexpected exception.
+            alignStateWithVpn()
+        }
+    }
 
+    private suspend fun enableImpl(client: SelectedVpnClient) {
         if (!checkShizuku()) return
 
+        if (shouldFreezeClientInIdle(client.packageName)) {
+            shizukuManager.unfreezeApp(client.packageName)
+        }
+
         if (shizukuManager.isAppFrozen(client.packageName)) {
-            fail("VPN-клиент ${client.displayName} заморожен!")
+            fail("VPN client ${client.displayName} is still frozen.")
             return
         }
 
@@ -98,7 +136,16 @@ class StealthOrchestrator(
         emitBenchmark(frozen = frozen, unfrozen = 0, startMs = benchStart)
 
         _progressText.value = "Запускаю VPN..."
-        vpnClientManager.startVPN(client)
+        val startError = vpnClientManager.startVPN(client)
+        if (startError != null) {
+            fail(startError)
+            return
+        }
+
+        if (client.controlMode != VpnControlMode.MANUAL && !waitForVpnOn(10_000)) {
+            fail("VPN client ${client.displayName} did not come up in time.")
+            return
+        }
 
         bumpVersion()
         _progressText.value = null
@@ -107,17 +154,41 @@ class StealthOrchestrator(
             _lastError.value = "Подключите VPN вручную в ${client.displayName}"
         }
 
-        _state.value = StealthState.ENABLED
+        // Compare-and-set guards the race where VpnMonitorService.onLost fires on a
+        // binder thread between waitForVpnOn succeeding and this line — it would
+        // set _state=DISABLED via applyManagedStateForVpn(false), and a plain
+        // assignment here would clobber that correct update back to ENABLED.
+        // If _state is no longer ENABLING, someone else already wrote a definitive
+        // value (ENABLED from applyManagedStateForVpn(true), DISABLED from onLost,
+        // or DISABLED from fail elsewhere) — don't overwrite.
+        _state.compareAndSet(StealthState.ENABLING, StealthState.ENABLED)
     }
 
     /**
      * Disable stealth (VPN OFF): stop VPN, freeze VPN_ONLY apps.
      * LOCAL stays frozen — they are only unfrozen by explicit launch.
      */
-    suspend fun disable(client: SelectedVpnClient, detectedPackage: String?) {
+    suspend fun disable(client: SelectedVpnClient, detectedPackage: String?) = withContext(Dispatchers.Default) {
+        // See comment on enable() — same detached-job + join() with timeout pattern.
         _lastError.value = null
         _state.value = StealthState.DISABLING
+        val app = context.applicationContext as AnubisApp
+        val job = app.scope.launch { disableImpl(client, detectedPackage) }
+        try {
+            val finished = withTimeoutOrNull(TOTAL_OP_TIMEOUT_MS) {
+                job.join(); true
+            } ?: false
+            if (!finished) {
+                job.cancel()
+                _progressText.value = null
+                _lastError.value = "Операция превысила таймаут (${TOTAL_OP_TIMEOUT_MS / 1000} с). Попробуйте снова."
+            }
+        } finally {
+            alignStateWithVpn()
+        }
+    }
 
+    private suspend fun disableImpl(client: SelectedVpnClient, detectedPackage: String?) {
         if (vpnClientManager.vpnActive.value) {
             _progressText.value = "Отключаю VPN..."
             if (!stopVpn(client, detectedPackage)) {
@@ -132,6 +203,17 @@ class StealthOrchestrator(
         // After confirmed VPN shutdown, align managed groups with the new network state.
         applyManagedStateForVpn(active = false)
         _progressText.value = null
+    }
+
+    private fun alignStateWithVpn() {
+        val current = _state.value
+        if (current == StealthState.ENABLING || current == StealthState.DISABLING) {
+            _state.value = if (vpnClientManager.vpnActive.value) {
+                StealthState.ENABLED
+            } else {
+                StealthState.DISABLED
+            }
+        }
     }
 
     /**
@@ -236,7 +318,7 @@ class StealthOrchestrator(
         return waitForVpnOff(2000)
     }
 
-    private fun checkShizuku(): Boolean {
+    private suspend fun checkShizuku(): Boolean {
         if (!shizukuManager.isAvailable()) { fail("Shizuku не запущен."); return false }
         if (!shizukuManager.hasPermission()) { fail("Нет разрешения Shizuku."); return false }
         return true
@@ -317,6 +399,7 @@ class StealthOrchestrator(
                 if (shouldUnfreezeManagedAppsOnVpnToggle()) {
                     unfrozen += unfreezeGroup(AppGroup.LOCAL)
                 }
+                freezeSelectedVpnClientIfNeeded()
                 _state.value = StealthState.DISABLED
             }
         }
@@ -338,11 +421,32 @@ class StealthOrchestrator(
         return false
     }
 
-    private fun fail(message: String) {
+    private suspend fun waitForVpnOn(timeoutMs: Long): Boolean {
+        val steps = (timeoutMs / 200).toInt()
+        repeat(steps) {
+            delay(200)
+            vpnClientManager.refreshVpnState()
+            if (vpnClientManager.vpnActive.value) return true
+        }
+        return false
+    }
+
+    private suspend fun fail(message: String) {
         _progressText.value = null
+        freezeSelectedVpnClientIfNeeded()
         _lastError.value = message
         _state.value = StealthState.DISABLED
     }
+
+    private suspend fun freezeSelectedVpnClientIfNeeded() {
+        val client = AppSettings.loadSelectedVpnClient(context)
+        if (!shouldFreezeClientInIdle(client.packageName)) return
+        if (!shizukuManager.awaitUserService(500)) return
+        shizukuManager.freezeApp(client.packageName)
+    }
+
+    private fun shouldFreezeClientInIdle(packageName: String): Boolean =
+        packageName.isNotBlank() && VpnClientControls.getControlForPackage(packageName).freezeInIdle
 
     private companion object {
         // Cap on concurrent Shizuku IPC calls during group freeze/unfreeze.
@@ -352,6 +456,15 @@ class StealthOrchestrator(
         // v0.1.5 binder path removes the shell-timeout class of failures but
         // not the broadcast-storm class, so parallelism stays low.
         const val FREEZE_CONCURRENCY = 2
+
+        // Hard ceiling for the entire enable/disable operation. Realistic budget:
+        // freezeGroup ~5 s (binder calls finish in <200 ms each, semaphore=2),
+        // startVPN 1–3 s, waitForVpnOn up to 10 s ≈ 20 s typical.
+        // 45 s covers slow OEMs + a couple of stuck binder calls hitting their 5 s
+        // BINDER_OP_TIMEOUT_MS cap, while still bailing before the user reaches for
+        // force-stop. If we hit this ceiling something is genuinely broken (Shizuku
+        // wedged, VPN client unresponsive) — no point waiting longer.
+        const val TOTAL_OP_TIMEOUT_MS = 45_000L
     }
 }
 
@@ -361,3 +474,5 @@ enum class StealthState {
     ENABLED,
     DISABLING
 }
+
+

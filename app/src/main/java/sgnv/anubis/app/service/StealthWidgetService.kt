@@ -5,10 +5,8 @@ import android.content.Context
 import android.content.Intent
 import android.os.IBinder
 import sgnv.anubis.app.AnubisApp
-import sgnv.anubis.app.data.repository.AppRepository
 import sgnv.anubis.app.settings.AppSettings
 import sgnv.anubis.app.vpn.SelectedVpnClient
-import sgnv.anubis.app.vpn.VpnClientManager
 import sgnv.anubis.app.vpn.VpnClientType
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -40,9 +38,8 @@ class StealthWidgetService : Service() {
 
         val app = applicationContext as AnubisApp
         val shizukuManager = app.shizukuManager
-        val vpnClientManager = VpnClientManager(this, shizukuManager)
-        val repo = AppRepository(app.database.managedAppDao(), this)
-        val orchestrator = StealthOrchestrator(this, shizukuManager, vpnClientManager, repo)
+        val vpnClientManager = app.vpnClientManager
+        val orchestrator = app.orchestrator
 
         val prefs = AppSettings.prefs(this)
         val pkg = prefs.getString(AppSettings.KEY_VPN_CLIENT_PACKAGE, null)
@@ -54,8 +51,6 @@ class StealthWidgetService : Service() {
             if (willBeActive) "Замораживаю..." else "Отключаю VPN...",
             StealthWidgetProvider.COLOR_WORKING
         )
-
-        vpnClientManager.startMonitoringVpn()
 
         scope.launch {
             try {
@@ -99,7 +94,6 @@ class StealthWidgetService : Service() {
                 }
 
                 progressJob.cancel()
-                vpnClientManager.stopMonitoringVpn()
             } finally {
                 // Always reset widget to real VPN state — covers normal completion,
                 // timeout, and any unexpected exception.

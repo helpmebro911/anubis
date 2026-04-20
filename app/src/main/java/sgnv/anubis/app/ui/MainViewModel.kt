@@ -9,8 +9,6 @@ import sgnv.anubis.app.data.model.AppGroup
 import sgnv.anubis.app.data.model.InstalledAppInfo
 import sgnv.anubis.app.data.model.ManagedApp
 import sgnv.anubis.app.data.model.NetworkInfo
-import sgnv.anubis.app.data.repository.AppRepository
-import sgnv.anubis.app.service.StealthOrchestrator
 import sgnv.anubis.app.service.StealthState
 import sgnv.anubis.app.service.StealthVpnService
 import sgnv.anubis.app.service.VpnMonitorService
@@ -19,7 +17,6 @@ import sgnv.anubis.app.shizuku.ShizukuStatus
 import sgnv.anubis.app.update.UpdateChecker
 import sgnv.anubis.app.update.UpdateInfo
 import sgnv.anubis.app.vpn.SelectedVpnClient
-import sgnv.anubis.app.vpn.VpnClientManager
 import sgnv.anubis.app.vpn.VpnClientType
 import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
@@ -46,9 +43,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private val app = application as AnubisApp
     val shizukuManager = app.shizukuManager
-    private val vpnClientManager = VpnClientManager(application, shizukuManager)
-    private val repository = AppRepository(app.database.managedAppDao(), application)
-    private val orchestrator = StealthOrchestrator(application, shizukuManager, vpnClientManager, repository)
+    private val vpnClientManager = app.vpnClientManager
+    private val repository = app.appRepository
+    private val orchestrator = app.orchestrator
 
     val stealthState: StateFlow<StealthState> = orchestrator.state
     val lastError: StateFlow<String?> = orchestrator.lastError
@@ -118,7 +115,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val resetCompleted: SharedFlow<Int> = _resetCompleted
 
     init {
-        vpnClientManager.startMonitoringVpn()
+        // VpnClientManager is started in AnubisApp.onCreate — don't re-register here.
         refreshVpnClients()
         loadSelectedClient()
         loadInstalledApps()
@@ -172,8 +169,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             } else if (stealthState.value == StealthState.ENABLED) {
                 val detectedPkg = vpnClientManager.activeVpnPackage.value
                 val detectedClient = vpnClientManager.activeVpnClient.value
-                val clientToStop = if (detectedClient != null) SelectedVpnClient.fromKnown(detectedClient)
-                    else vpnClientManager.activeVpnPackage.value?.let { SelectedVpnClient.fromPackage(it) }
+                val clientToStop = if (detectedClient != null) {
+                    AppSettings.loadSelectedVpnClient(getApplication(), detectedClient.packageName)
+                } else vpnClientManager.activeVpnPackage.value?.let {
+                    AppSettings.loadSelectedVpnClient(getApplication(), it)
+                }
                     ?: _selectedVpnClient.value
                 orchestrator.disable(clientToStop, detectedPkg)
                 if (orchestrator.state.value == StealthState.DISABLED) {
@@ -196,8 +196,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             val detectedPkg = vpnClientManager.activeVpnPackage.value
             val detectedClient = vpnClientManager.activeVpnClient.value
-            val clientToStop = if (detectedClient != null) SelectedVpnClient.fromKnown(detectedClient)
-                else detectedPkg?.let { SelectedVpnClient.fromPackage(it) }
+            val clientToStop = if (detectedClient != null) {
+                AppSettings.loadSelectedVpnClient(getApplication(), detectedClient.packageName)
+            } else detectedPkg?.let {
+                AppSettings.loadSelectedVpnClient(getApplication(), it)
+            }
                 ?: _selectedVpnClient.value
             orchestrator.launchLocal(packageName, clientToStop, detectedPkg)
             if (orchestrator.state.value == StealthState.DISABLED) {
@@ -416,11 +419,27 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun selectVpnClient(client: SelectedVpnClient) {
-        _selectedVpnClient.value = client
+        val persistedClient = AppSettings.loadSelectedVpnClient(getApplication(), client.packageName)
+        _selectedVpnClient.value = client.copy(
+            automationToken = client.automationToken ?: persistedClient.automationToken,
+        )
         AppSettings.prefs(getApplication())
             .edit {
                 putString(AppSettings.KEY_VPN_CLIENT_PACKAGE, client.packageName)
             }
+    }
+
+    fun updateSelectedVpnClientAutomationToken(token: String) {
+        val normalizedToken = token.trim()
+        val current = _selectedVpnClient.value
+        AppSettings.setVpnClientAutomationToken(
+            getApplication(),
+            current.packageName,
+            normalizedToken.takeIf { it.isNotEmpty() },
+        )
+        _selectedVpnClient.value = current.copy(
+            automationToken = normalizedToken.takeIf { it.isNotEmpty() },
+        )
     }
 
     fun isVpnClientEnabled(packageName: String): Boolean {
@@ -573,19 +592,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun loadSelectedClient() {
-        val prefs = AppSettings.prefs(getApplication())
-        val pkg = prefs.getString(AppSettings.KEY_VPN_CLIENT_PACKAGE, null)
-            ?: prefs.getString("vpn_client", null)?.let {
-                // Migration from old format (enum name → package name)
-                try { VpnClientType.valueOf(it).packageName } catch (e: Exception) { null }
-            }
-        _selectedVpnClient.value = if (pkg != null) {
-            SelectedVpnClient.fromPackage(pkg)
-        } else {
-            SelectedVpnClient.fromKnown(VpnClientType.V2RAY_NG)
-        }
+        _selectedVpnClient.value = AppSettings.loadSelectedVpnClient(getApplication())
     }
-
     private fun loadUpdateCheckPref() {
         _updateCheckEnabled.value = UpdateChecker.isEnabled(getApplication())
     }
@@ -625,7 +633,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     override fun onCleared() {
-        vpnClientManager.stopMonitoringVpn()
+        // VpnClientManager is a process-wide singleton in AnubisApp — don't stop it here.
         super.onCleared()
     }
 }
+

@@ -49,15 +49,24 @@ class VpnClientManager(
      * For TOGGLE: sends toggle only if VPN is currently off.
      * For MANUAL: just opens the app.
      */
-    suspend fun startVPN(client: SelectedVpnClient) {
+    suspend fun startVPN(client: SelectedVpnClient): String? {
         val knownType = client.knownType
         if (knownType != null) {
-            val control = VpnClientControls.getControl(knownType)
+            val control = VpnClientControls.getControlForClient(client)
             when (control.mode) {
                 VpnControlMode.SEPARATE -> {
-                    val cmd = control.startCommand ?: return
+                    val cmd = control.buildStartCommand(client)
+                    if (cmd == null) {
+                        val controlError = control.buildStartCommandFailureMessage(client)
+                        if (controlError != null) {
+                            Log.w(TAG, controlError)
+                            return controlError
+                        }
+                        launchApp(client.packageName)
+                        return null
+                    }
                     // Shell commands need UserService — binder freeze before us didn't.
-                    shizukuManager.awaitUserService(2000)
+                    shizukuManager.awaitUserService(500)
                     val result = shizukuManager.execShellCommand(*cmd)
                     if (result.isFailure) {
                         Log.w(TAG, "Start failed for ${client.displayName}", result.exceptionOrNull())
@@ -66,8 +75,17 @@ class VpnClientManager(
                 }
                 VpnControlMode.TOGGLE -> {
                     if (!_vpnActive.value) {
-                        val cmd = control.startCommand ?: return
-                        shizukuManager.awaitUserService(2000)
+                        val cmd = control.buildStartCommand(client)
+                        if (cmd == null) {
+                            val controlError = control.buildStartCommandFailureMessage(client)
+                            if (controlError != null) {
+                                Log.w(TAG, controlError)
+                                return controlError
+                            }
+                            launchApp(client.packageName)
+                            return null
+                        }
+                        shizukuManager.awaitUserService(500)
                         val result = shizukuManager.execShellCommand(*cmd)
                         if (result.isFailure) {
                             Log.w(TAG, "Toggle-start failed for ${client.displayName}", result.exceptionOrNull())
@@ -81,23 +99,24 @@ class VpnClientManager(
             // Custom / unknown client — just open it
             launchApp(client.packageName)
         }
+        return null
     }
 
     suspend fun stopVPN(client: SelectedVpnClient) {
         val knownType = client.knownType
         if (knownType != null) {
-            val control = VpnClientControls.getControl(knownType)
+            val control = VpnClientControls.getControlForClient(client)
             when (control.mode) {
                 VpnControlMode.SEPARATE -> {
-                    val cmd = control.stopCommand ?: return
-                    shizukuManager.awaitUserService(2000)
+                    val cmd = control.buildStopCommand(client) ?: return
+                    shizukuManager.awaitUserService(500)
                     val result = shizukuManager.execShellCommand(*cmd)
                     if (result.isFailure) Log.w(TAG, "Stop failed for ${client.displayName}", result.exceptionOrNull())
                 }
                 VpnControlMode.TOGGLE -> {
                     if (_vpnActive.value) {
-                        val cmd = control.startCommand ?: return
-                        shizukuManager.awaitUserService(2000)
+                        val cmd = control.buildStartCommand(client) ?: return
+                        shizukuManager.awaitUserService(500)
                         val result = shizukuManager.execShellCommand(*cmd)
                         if (result.isFailure) Log.w(TAG, "Toggle-stop failed for ${client.displayName}", result.exceptionOrNull())
                     }
@@ -135,7 +154,10 @@ class VpnClientManager(
             }
 
             override fun onLost(network: Network) {
-                val stillActive = isVpnCurrentlyActive(cm)
+                // Exclude the just-lost network: at the moment onLost is dispatched,
+                // the system may not have removed it from allNetworks yet, so without
+                // this the check sees the dying network and _vpnActive stays true.
+                val stillActive = isVpnCurrentlyActive(cm, exclude = network)
                 _vpnActive.value = stillActive
                 if (!stillActive) {
                     _activeVpnClient.value = null
@@ -254,15 +276,17 @@ class VpnClientManager(
         return null
     }
 
-    private fun isVpnCurrentlyActive(cm: ConnectivityManager): Boolean {
+    private fun isVpnCurrentlyActive(cm: ConnectivityManager, exclude: Network? = null): Boolean {
         // Don't gate on dummyVpnInFlight here: orchestrator.waitForVpnOff() relies on this
         // to see the real picture. If we pretend no VPN is active while our dummy + the
         // external VPN are both in the list, waitForVpnOff returns true instantly,
         // Step 3 force-stop is skipped, and launchLocal proceeds with the external VPN
         // still running (regression in v0.1.4, issue #63). The dummy-vs-external
         // distinction is only needed in VpnMonitorService — see the guard there.
+        // `exclude` is used by onLost to skip the network being lost (see callsite).
         return try {
             cm.allNetworks.any { network ->
+                if (network == exclude) return@any false
                 cm.getNetworkCapabilities(network)
                     ?.hasTransport(NetworkCapabilities.TRANSPORT_VPN) == true
             }
