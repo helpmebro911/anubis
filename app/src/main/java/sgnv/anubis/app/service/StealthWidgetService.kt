@@ -49,7 +49,6 @@ class StealthWidgetService : Service() {
             ?: VpnClientType.V2RAY_NG.packageName
         val client = SelectedVpnClient.fromPackage(pkg)
 
-        // Immediate feedback before the Shizuku bind delay.
         StealthWidgetProvider.updateAllWidgets(
             this,
             if (willBeActive) "Замораживаю..." else "Отключаю VPN...",
@@ -59,44 +58,54 @@ class StealthWidgetService : Service() {
         vpnClientManager.startMonitoringVpn()
 
         scope.launch {
-            shizukuManager.awaitUserService()
+            try {
+                shizukuManager.awaitUserService()
 
-            // Mirror each orchestrator progress step into the widget text.
-            val progressJob = launch {
-                orchestrator.progressText.filterNotNull().collect { text ->
-                    StealthWidgetProvider.updateAllWidgets(
-                        this@StealthWidgetService, text, StealthWidgetProvider.COLOR_WORKING
-                    )
-                }
-            }
-
-            if (willBeActive) {
-                orchestrator.enable(client)
-                VpnMonitorService.start(this@StealthWidgetService)
-                if (orchestrator.lastError.value == null) {
-                    // startVPN() is fire-and-forget — wait for the network callback
-                    // to confirm VPN actually appeared before showing final state.
-                    StealthWidgetProvider.updateAllWidgets(
-                        this@StealthWidgetService, "Подключаю...", StealthWidgetProvider.COLOR_WORKING
-                    )
-                    withTimeoutOrNull(VPN_CONNECT_TIMEOUT_MS) {
-                        vpnClientManager.vpnActive.first { it }
+                val progressJob = launch {
+                    orchestrator.progressText.filterNotNull().collect { text ->
+                        StealthWidgetProvider.updateAllWidgets(
+                            this@StealthWidgetService, text, StealthWidgetProvider.COLOR_WORKING
+                        )
                     }
                 }
-            } else {
-                vpnClientManager.refreshVpnState()
-                vpnClientManager.detectActiveVpnClient()
-                val detectedPkg = vpnClientManager.activeVpnPackage.value
-                orchestrator.disable(client, detectedPkg)
-                VpnMonitorService.stop(this@StealthWidgetService)
-            }
 
-            progressJob.cancel()
-            vpnClientManager.stopMonitoringVpn()
-            // Real state from ConnectivityManager: VPN is either confirmed up (enable path)
-            // or confirmed down (disable path confirmed by stopVpn()).
-            StealthWidgetProvider.updateAllWidgets(this@StealthWidgetService)
-            stopSelf()
+                // Hard ceiling for the entire operation so the widget never gets
+                // permanently stuck in an intermediate state if something hangs.
+                withTimeoutOrNull(TOTAL_TOGGLE_TIMEOUT_MS) {
+                    if (willBeActive) {
+                        VpnMonitorService.start(this@StealthWidgetService)
+                        orchestrator.enable(client)
+                        // join() ensures any in-flight updateAllWidgets() inside
+                        // progressJob completes before we overwrite with final state.
+                        progressJob.cancel()
+                        progressJob.join()
+                        if (orchestrator.lastError.value == null) {
+                            StealthWidgetProvider.updateAllWidgets(
+                                this@StealthWidgetService, "Подключаю...", StealthWidgetProvider.COLOR_WORKING
+                            )
+                            withTimeoutOrNull(VPN_CONNECT_TIMEOUT_MS) {
+                                vpnClientManager.vpnActive.first { it }
+                            }
+                        }
+                    } else {
+                        vpnClientManager.refreshVpnState()
+                        vpnClientManager.detectActiveVpnClient()
+                        val detectedPkg = vpnClientManager.activeVpnPackage.value
+                        orchestrator.disable(client, detectedPkg)
+                        VpnMonitorService.stop(this@StealthWidgetService)
+                        progressJob.cancel()
+                        progressJob.join()
+                    }
+                }
+
+                progressJob.cancel()
+                vpnClientManager.stopMonitoringVpn()
+            } finally {
+                // Always reset widget to real VPN state — covers normal completion,
+                // timeout, and any unexpected exception.
+                StealthWidgetProvider.updateAllWidgets(this@StealthWidgetService)
+                stopSelf()
+            }
         }
     }
 
@@ -108,6 +117,10 @@ class StealthWidgetService : Service() {
     companion object {
         const val ACTION_TOGGLE = "sgnv.anubis.app.WIDGET_DO_TOGGLE"
         private const val VPN_CONNECT_TIMEOUT_MS = 15_000L
+
+        // Freeze/unfreeze timeout per app is 5 s (ShizukuManager.BINDER_OP_TIMEOUT_MS).
+        // Budget: awaitUserService 500 ms + freeze batch ~10 s + VPN connect 15 s + margin.
+        private const val TOTAL_TOGGLE_TIMEOUT_MS = 40_000L
 
         fun toggle(context: Context) {
             context.startService(

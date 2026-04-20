@@ -20,6 +20,7 @@ import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.sync.withPermit
@@ -168,26 +169,31 @@ class VpnMonitorService : Service() {
 
     private suspend fun applyManagedStateForVpn(active: Boolean) {
         val mutex = (applicationContext as AnubisApp).groupOpMutex
-        mutex.withLock {
-            if (active) {
-                freezeGroup(AppGroup.LOCAL)
-                // LOCAL_AUTO_UNFREEZE: freeze unconditionally when VPN comes up — that's the whole point of the group.
-                freezeGroup(AppGroup.LOCAL_AUTO_UNFREEZE)
-                // Mirror manual orchestration when VPN is toggled outside Anubis.
-                if (AppSettings.shouldUnfreezeManagedAppsOnVpnToggle(applicationContext)) {
-                    unfreezeGroup(AppGroup.VPN_ONLY)
-                }
-            } else {
-                freezeGroup(AppGroup.VPN_ONLY)
-                // LOCAL_AUTO_UNFREEZE: unfreeze unconditionally when VPN goes down — that's the whole point of the group.
-                unfreezeGroup(AppGroup.LOCAL_AUTO_UNFREEZE)
-                // Mirror manual orchestration when VPN is toggled outside Anubis.
-                if (AppSettings.shouldUnfreezeManagedAppsOnVpnToggle(applicationContext)) {
-                    unfreezeGroup(AppGroup.LOCAL)
+        try {
+            // Hard ceiling: if freeze/unfreeze hangs (e.g. binder IPC stuck),
+            // withTimeoutOrNull cancels the lock holder and releases the mutex
+            // via withLock's finally block — preventing permanent mutex starvation.
+            withTimeoutOrNull(APPLY_STATE_TIMEOUT_MS) {
+                mutex.withLock {
+                    if (active) {
+                        freezeGroup(AppGroup.LOCAL)
+                        freezeGroup(AppGroup.LOCAL_AUTO_UNFREEZE)
+                        if (AppSettings.shouldUnfreezeManagedAppsOnVpnToggle(applicationContext)) {
+                            unfreezeGroup(AppGroup.VPN_ONLY)
+                        }
+                    } else {
+                        freezeGroup(AppGroup.VPN_ONLY)
+                        unfreezeGroup(AppGroup.LOCAL_AUTO_UNFREEZE)
+                        if (AppSettings.shouldUnfreezeManagedAppsOnVpnToggle(applicationContext)) {
+                            unfreezeGroup(AppGroup.LOCAL)
+                        }
+                    }
                 }
             }
+        } finally {
+            // Always update widget to real VPN state — even if freeze/unfreeze timed out.
+            StealthWidgetProvider.updateAllWidgets(applicationContext)
         }
-        StealthWidgetProvider.updateAllWidgets(applicationContext)
     }
 
     private fun buildNotification(): Notification {
@@ -217,8 +223,12 @@ class VpnMonitorService : Service() {
         const val ACTION_STOP = "sgnv.anubis.app.STOP_MONITOR"
         const val NOTIFICATION_ID = 1
 
-        // Mirrors StealthOrchestrator.FREEZE_CONCURRENCY — see comment there.
-        private const val FREEZE_CONCURRENCY = 4
+        private const val FREEZE_CONCURRENCY = 2
+
+        // Per-binder-op timeout is 5 s (ShizukuManager.BINDER_OP_TIMEOUT_MS).
+        // With FREEZE_CONCURRENCY=2 and up to ~30 managed apps, worst case
+        // is ceil(30/2) * 5 s = 75 s — use 90 s as the ceiling for the whole op.
+        private const val APPLY_STATE_TIMEOUT_MS = 90_000L
 
         fun start(context: Context) {
             val intent = Intent(context, VpnMonitorService::class.java).apply {

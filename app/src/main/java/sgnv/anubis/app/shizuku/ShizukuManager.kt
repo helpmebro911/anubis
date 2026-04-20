@@ -165,18 +165,24 @@ class ShizukuManager(private val packageManager: PackageManager) {
      * either times out or returns success without effect. Binder IPC is preserved by OEMs
      * (required for OS function), so direct Binder calls work where shell does not.
      */
-    suspend fun freezeApp(packageName: String): Result<Unit> = withContext(Dispatchers.IO) {
-        forceStopInternal(packageName)
-        setAppEnabledState(packageName, enabled = false)
-    }
+    suspend fun freezeApp(packageName: String): Result<Unit> =
+        withTimeoutOrNull(BINDER_OP_TIMEOUT_MS) {
+            withContext(Dispatchers.IO) {
+                forceStopInternal(packageName)
+                setAppEnabledState(packageName, enabled = false)
+            }
+        } ?: Result.failure(RuntimeException("freezeApp timed out: $packageName"))
 
     /**
      * Unfreezes a package by setting `COMPONENT_ENABLED_STATE_ENABLED` via the same
      * binder path as `freezeApp`.
      */
-    suspend fun unfreezeApp(packageName: String): Result<Unit> = withContext(Dispatchers.IO) {
-        setAppEnabledState(packageName, enabled = true)
-    }
+    suspend fun unfreezeApp(packageName: String): Result<Unit> =
+        withTimeoutOrNull(BINDER_OP_TIMEOUT_MS) {
+            withContext(Dispatchers.IO) {
+                setAppEnabledState(packageName, enabled = true)
+            }
+        } ?: Result.failure(RuntimeException("unfreezeApp timed out: $packageName"))
 
     fun isAppFrozen(packageName: String): Boolean {
         return try {
@@ -274,6 +280,13 @@ class ShizukuManager(private val packageManager: PackageManager) {
          * validates against on some API levels.
          */
         private const val CALLER_PACKAGE = "com.android.shell"
+
+        /**
+         * Binder IPC calls (freeze/unfreeze) normally complete in < 200 ms.
+         * 5 s is long enough to survive a temporarily busy system and short enough
+         * to prevent the groupOpMutex from being held indefinitely on a hung call.
+         */
+        private const val BINDER_OP_TIMEOUT_MS = 5_000L
 
         /**
          * Main user ID for this process. For app UIDs Android encodes userId as `uid / 100_000`

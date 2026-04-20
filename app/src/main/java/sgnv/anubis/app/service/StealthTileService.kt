@@ -47,29 +47,31 @@ class StealthTileService : TileService() {
         vpnClientManager.startMonitoringVpn()
 
         scope.launch {
-            shizukuManager.awaitUserService()
+            try {
+                shizukuManager.awaitUserService()
 
-            if (willBeActive) {
-                orchestrator.enable(client)
-                VpnMonitorService.start(this@StealthTileService)
-                if (orchestrator.lastError.value == null) {
-                    // startVPN() is fire-and-forget — wait for the real network callback.
-                    // Tile already shows ON from the optimistic update while we wait.
-                    withTimeoutOrNull(VPN_CONNECT_TIMEOUT_MS) {
-                        vpnClientManager.vpnActive.first { it }
+                withTimeoutOrNull(TOTAL_TOGGLE_TIMEOUT_MS) {
+                    if (willBeActive) {
+                        VpnMonitorService.start(this@StealthTileService)
+                        orchestrator.enable(client)
+                        if (orchestrator.lastError.value == null) {
+                            withTimeoutOrNull(VPN_CONNECT_TIMEOUT_MS) {
+                                vpnClientManager.vpnActive.first { it }
+                            }
+                        }
+                    } else {
+                        vpnClientManager.refreshVpnState()
+                        vpnClientManager.detectActiveVpnClient()
+                        val detectedPkg = vpnClientManager.activeVpnPackage.value
+                        orchestrator.disable(client, detectedPkg)
+                        VpnMonitorService.stop(this@StealthTileService)
                     }
                 }
-            } else {
-                vpnClientManager.refreshVpnState()
-                vpnClientManager.detectActiveVpnClient()
-                val detectedPkg = vpnClientManager.activeVpnPackage.value
-                orchestrator.disable(client, detectedPkg)
-                VpnMonitorService.stop(this@StealthTileService)
-            }
 
-            vpnClientManager.stopMonitoringVpn()
-            // Real state: VPN confirmed up (enable) or down (disable / timeout).
-            updateTile()
+                vpnClientManager.stopMonitoringVpn()
+            } finally {
+                updateTile()
+            }
         }
     }
 
@@ -100,5 +102,6 @@ class StealthTileService : TileService() {
 
     companion object {
         private const val VPN_CONNECT_TIMEOUT_MS = 15_000L
+        private const val TOTAL_TOGGLE_TIMEOUT_MS = 40_000L
     }
 }
