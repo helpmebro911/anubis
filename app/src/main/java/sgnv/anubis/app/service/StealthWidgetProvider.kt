@@ -28,9 +28,9 @@ class StealthWidgetProvider : AppWidgetProvider() {
     companion object {
         const val ACTION_TOGGLE = "sgnv.anubis.app.WIDGET_TOGGLE"
 
-        const val COLOR_ACTIVE = 0xFF4CAF50.toInt()
-        const val COLOR_INACTIVE = 0xFF9E9E9E.toInt()
-        const val COLOR_WORKING = 0xFFFFAA00.toInt()
+        fun activeColor(context: Context): Int = context.getColor(R.color.widget_icon_active)
+        fun inactiveColor(context: Context): Int = context.getColor(R.color.widget_icon_inactive)
+        fun workingColor(context: Context): Int = context.getColor(R.color.widget_icon_working)
 
         fun updateAllWidgets(context: Context) {
             val vpnActive = isVpnActive(context)

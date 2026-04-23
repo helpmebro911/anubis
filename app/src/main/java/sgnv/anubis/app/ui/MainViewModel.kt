@@ -38,6 +38,7 @@ import kotlinx.coroutines.withContext
 import kotlin.math.roundToInt
 import org.json.JSONObject
 import java.net.URL
+import sgnv.anubis.app.ui.util.renderToBitmap
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
 
@@ -273,10 +274,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }
             Icon.createWithAdaptiveBitmap(bmp)
         } else {
-            val bmp = createBitmap(visibleSize, visibleSize)
-            val canvas = Canvas(bmp)
-            drawable.setBounds(0, 0, visibleSize, visibleSize)
-            drawable.draw(canvas)
+            val bmp = drawable.renderToBitmap(visibleSize, visibleSize)
             Icon.createWithBitmap(bmp)
         }
     }
